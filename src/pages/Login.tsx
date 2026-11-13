@@ -14,6 +14,10 @@ import { fieldError } from "@/pages/pricing/fieldError";
 import { loginSchema, type LoginValues } from "@/schemas/account";
 import type { ApiError } from "@/types/api-response";
 
+// TODO: set to false once the auth API is available.
+/** While true, any valid email and password signs in with a placeholder token (no API call). */
+const MOCK_AUTH = true;
+
 const highlights = [
   { icon: Megaphone, title: "Campaigns & audiences", text: "Monitor delivery, pricing and the audience marketplace." },
   { icon: Wallet, title: "Wallets & finance", text: "Track funding, charges, referrals and reports." },
@@ -105,8 +109,7 @@ export const Login = () => {
   const onSubmit = async (values: LoginValues) => {
     clearErrors("root");
     try {
-      // TODO: remove the development shortcut once the auth API is available.
-      const result = import.meta.env.DEV ? { token: "dev-token" } : await authService.login(values);
+      const result = MOCK_AUTH ? { token: "mock-token" } : await authService.login(values);
       login(result);
       navigate(from, { replace: true });
     } catch (error) {
@@ -200,10 +203,10 @@ export const Login = () => {
             </WebAppButton>
           </form>
 
-          {import.meta.env.DEV && (
+          {MOCK_AUTH && (
             <p className="mt-4 flex items-start gap-2 rounded-lg bg-stone-50 px-3 py-2 text-xs text-gray-600">
               <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" />
-              Development mode: any valid email and password signs you in until the auth API is connected.
+              Demo mode: any valid email and password signs you in until the auth API is connected.
             </p>
           )}
 
