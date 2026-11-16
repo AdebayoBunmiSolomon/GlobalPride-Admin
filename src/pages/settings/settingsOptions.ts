@@ -13,6 +13,15 @@ export const sessionTimeoutOptions = [
   { label: "4 hours", value: "240" },
 ];
 
-export const ACCEPTED_LOGO_TYPES = ["image/png", "image/jpeg", "image/webp", "image/svg+xml"];
-/** Kept small because settings (including the logo) are stored in localStorage. */
-export const MAX_LOGO_BYTES = 1024 * 1024;
+/** Includes `current` when it isn't one of the presets (the API accepts any value from 5 to 1440). */
+export const sessionTimeoutOptionsWith = (current: number) =>
+  sessionTimeoutOptions.some((option) => option.value === String(current))
+    ? sessionTimeoutOptions
+    : [...sessionTimeoutOptions, { label: `${current} minutes`, value: String(current) }].sort(
+        (a, b) => Number(a.value) - Number(b.value),
+      );
+
+/** What the API accepts for the logo (sent as a data: URI). */
+export const ACCEPTED_LOGO_TYPES = ["image/png", "image/jpeg", "image/webp"];
+/** The API takes "at most about 400 KB" as a data: URI, which is a third larger than the file. */
+export const MAX_LOGO_BYTES = 290 * 1024;

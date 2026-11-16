@@ -4,11 +4,10 @@ import type {
   Promotion,
   PromotionStatus,
   PromotionTarget,
-  ReferralBonusStatus,
   ReferralRewardType,
   ReferralTrigger,
-  ServicePriceStatus,
 } from "@/types/pricing";
+import type { CampaignPrice } from "@/api/types/response";
 import { formatPrice } from "@/utils/format";
 
 const toOptions = <T extends string>(labels: Record<T, string>) =>
@@ -36,19 +35,19 @@ export const promotionTargetLabels: Record<PromotionTarget, string> = {
   audience_rental: "Audience Rental",
 };
 
-export const rewardTypeOptions = toOptions(rewardTypeLabels);
-export const triggerOptions = toOptions(triggerLabels);
+/** "wallet_credit" → "Wallet Credit" for values without a label. */
+const humanize = (value: string) => value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+
+/** Label for an API reward type / trigger, falling back to a readable form of unknown values. */
+export const rewardTypeLabel = (value: string) => rewardTypeLabels[value as ReferralRewardType] ?? humanize(value);
+export const triggerLabel = (value: string) => triggerLabels[value as ReferralTrigger] ?? humanize(value);
+
 export const discountTypeOptions = toOptions(discountTypeLabels);
 export const promotionTargetOptions = toOptions(promotionTargetLabels);
 
-export const servicePriceStatusStyles: Record<ServicePriceStatus, BadgeStyle> = {
+export const servicePriceStatusStyles: Record<CampaignPrice["status"], BadgeStyle> = {
   active: { label: "Active", variant: "success", className: "text-green-700" },
   coming_soon: { label: "Coming Soon", variant: "warning", className: "text-amber-700" },
-};
-
-export const referralStatusStyles: Record<ReferralBonusStatus, BadgeStyle> = {
-  active: { label: "Active", variant: "success", className: "text-green-700" },
-  inactive: { label: "Inactive", variant: "neutral" },
 };
 
 export const promotionStatusStyles: Record<PromotionStatus, BadgeStyle> = {
@@ -57,13 +56,12 @@ export const promotionStatusStyles: Record<PromotionStatus, BadgeStyle> = {
   expired: { label: "Expired", variant: "warning", className: "text-amber-700" },
 };
 
-export const referralStatusOptions = toOptions(
-  { active: "Active", inactive: "Inactive" } satisfies Record<ReferralBonusStatus, string>,
-);
+export const promotionStatusFilterOptions = [
+  { label: "All Statuses", value: "all" },
+  ...toOptions({ active: "Active", scheduled: "Scheduled", expired: "Expired" } satisfies Record<PromotionStatus, string>),
+];
 
-export const promotionStatusOptions = toOptions(
-  { active: "Active", scheduled: "Scheduled", expired: "Expired" } satisfies Record<PromotionStatus, string>,
-);
+export const promotionTargetFilterOptions = [{ label: "All Services", value: "all" }, ...promotionTargetOptions];
 
 /** 10% or ₦2 */
 export const formatDiscount = ({ discountType, discountValue }: Pick<Promotion, "discountType" | "discountValue">) =>

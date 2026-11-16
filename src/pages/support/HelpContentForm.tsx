@@ -4,23 +4,25 @@ import { Controller, useForm } from "react-hook-form";
 import { yupResolver } from "@hookform/resolvers/yup";
 import { Eye, Newspaper, Save } from "lucide-react";
 
+import type { AdminHelpContent, HelpContentKind, HelpContentStatus } from "@/api/types/response";
+import { handleApiError } from "@/api/utils";
 import { WebAppButton } from "@/components/Button";
 import { WebAppCard } from "@/components/Card";
-import { WebAppEmptyState } from "@/components/EmptyState";
 import { WebAppInput } from "@/components/Input";
 import { WebAppPageHeader } from "@/components/PageHeader";
 import { WebAppRichTextEditor } from "@/components/RichTextEditor";
 import { WebAppSelectInput } from "@/components/Select";
-import { useSupport } from "@/hooks/useSupport";
+import { WebAppTextarea } from "@/components/Textarea";
 import { fieldError } from "@/pages/pricing/fieldError";
 import { makeHelpContentSchema, type HelpContentValues } from "@/schemas/support";
-import type { HelpContent, HelpContentKind, HelpContentStatus } from "@/types/support";
+import { createHelpContent, updateHelpContent, useHelpContent } from "@/store/supportStore";
+import { appToast } from "@/utils/appToast";
 import { cn } from "@/utils/cn";
 import { sanitizeRichText } from "@/utils/richText";
-import { HelpContentPreviewModal } from "./SupportParts";
+import { HelpContentPreviewModal, ItemLoadState } from "./SupportParts";
 import { helpCategoryOptions, helpContentKinds, helpStatusStyles } from "./supportOptions";
 
-const statuses: HelpContentStatus[] = ["published", "unpublished"];
+const statuses: HelpContentStatus[] = ["published", "draft"];
 
 const StatusToggle = ({
   labelId,
@@ -63,14 +65,15 @@ const Required = () => (
 interface HelpContentFormProps {
   kind: HelpContentKind;
   /** Omit to create a new article / FAQ. */
-  content?: HelpContent;
+  content?: AdminHelpContent;
 }
 
 const HelpContentForm = ({ kind, content }: HelpContentFormProps) => {
   const config = helpContentKinds[kind];
   const navigate = useNavigate();
-  const { createContent, updateContent } = useSupport();
-  const [preview, setPreview] = useState<Pick<HelpContent, "title" | "category" | "body">>();
+  const [preview, setPreview] = useState<Pick<AdminHelpContent, "title" | "category" | "body">>();
+  const categoryOptions = useMemo(() => helpCategoryOptions(content?.category), [content?.category]);
+  const noun = kind === "article" ? "Article" : "FAQ";
   const schema = useMemo(
     () => makeHelpContentSchema({ titleRequired: config.titleRequired, bodyRequired: config.bodyRequired }),
     [config],
@@ -85,16 +88,37 @@ const HelpContentForm = ({ kind, content }: HelpContentFormProps) => {
   } = useForm<HelpContentValues>({
     resolver: yupResolver(schema),
     defaultValues: content
-      ? { title: content.title, category: content.category, status: content.status, body: content.body }
-      : { title: "", status: "unpublished", body: "" },
+      ? {
+          title: content.title,
+          category: content.category || undefined,
+          summary: content.summary,
+          status: content.status,
+          body: content.body ?? "",
+        }
+      : { title: "", summary: "", status: "draft", body: "" },
   });
 
-  // TODO: send to the API once the content endpoints are available.
-  const onSubmit = (values: HelpContentValues) => {
-    const input = { ...values, body: sanitizeRichText(values.body) };
-    if (content) updateContent(kind, content.id, input);
-    else createContent(kind, input);
-    navigate(config.path);
+  const onSubmit = async (values: HelpContentValues) => {
+    const input = {
+      title: values.title,
+      category: values.category,
+      summary: values.summary ?? "",
+      body: sanitizeRichText(values.body),
+      publish: values.status === "published",
+    };
+    try {
+      const { message } = content
+        ? await updateHelpContent(kind, content.id, input)
+        : await createHelpContent(kind, input);
+      appToast.show(
+        content ? `${noun} updated` : `${noun} created`,
+        message || (input.publish ? "It's visible in the Global Pride app." : "It's saved as unpublished."),
+        "success",
+      );
+      navigate(config.path);
+    } catch (caught) {
+      handleApiError(caught, { fallbackMessage: `We couldn't save this ${noun.toLowerCase()}.` });
+    }
   };
 
   const openPreview = () => {
@@ -126,7 +150,7 @@ const HelpContentForm = ({ kind, content }: HelpContentFormProps) => {
                   label="Category"
                   required
                   placeholder="Select a category"
-                  options={helpCategoryOptions}
+                  options={categoryOptions}
                   value={field.value ?? ""}
                   onChange={field.onChange}
                   error={fieldError(errors.category?.message)}
@@ -146,6 +170,19 @@ const HelpContentForm = ({ kind, content }: HelpContentFormProps) => {
               />
             </div>
           </div>
+
+          {kind === "article" && (
+            <WebAppTextarea
+              id="articleSummary"
+              label="Summary"
+              rows={2}
+              maxLength={300}
+              placeholder="A short description shown under the title in the app's article list"
+              helperText="Optional · up to 300 characters."
+              error={fieldError(errors.summary?.message)}
+              {...register("summary")}
+            />
+          )}
 
           <p className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-gray-600">{config.statusNote}</p>
         </div>
@@ -218,24 +255,22 @@ const CreateHelpContent = ({ kind }: { kind: HelpContentKind }) => {
 
 const EditHelpContent = ({ kind }: { kind: HelpContentKind }) => {
   const config = helpContentKinds[kind];
-  const { contentId } = useParams();
-  const navigate = useNavigate();
-  const content = useSupport((state) => state.content[kind].find((item) => item.id === contentId));
+  const { contentId = "" } = useParams();
+  // Loaded by id (not taken from the list) so the form has the full body.
+  const { data: content, error, loading, refresh } = useHelpContent(kind, contentId);
   const backLink = { label: config.backLabel, to: config.path };
 
   if (!content) {
     return (
-      <div>
-        <WebAppPageHeader breadcrumbs={breadcrumbsFor(kind, config.editCrumb)} backLink={backLink} />
-        <WebAppCard>
-          <WebAppEmptyState
-            icon={<Newspaper className="h-6 w-6" />}
-            title={config.notFoundTitle}
-            description="It may have been deleted, or the link is incorrect."
-            primaryAction={{ label: config.backLabel, onClick: () => navigate(config.path) }}
-          />
-        </WebAppCard>
-      </div>
+      <ItemLoadState
+        breadcrumbs={breadcrumbsFor(kind, config.editCrumb)}
+        backLink={backLink}
+        icon={<Newspaper className="h-6 w-6" />}
+        noun={kind === "article" ? "Article" : "FAQ"}
+        error={error}
+        loading={loading}
+        onRetry={refresh}
+      />
     );
   }
 

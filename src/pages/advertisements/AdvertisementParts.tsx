@@ -1,13 +1,13 @@
 import { useNavigate } from "react-router-dom";
-import { Image, ImageOff } from "lucide-react";
+import { CircleAlert, Image, ImageOff } from "lucide-react";
 
+import type { AdminAdvertisement, ApiError, AdvertisementStatus } from "@/api/types/response";
 import { WebAppBadge } from "@/components/Badge";
 import { WebAppButton } from "@/components/Button";
 import { WebAppCard } from "@/components/Card";
 import { WebAppEmptyState } from "@/components/EmptyState";
 import { WebAppModal } from "@/components/Modal";
 import { WebAppPageHeader } from "@/components/PageHeader";
-import type { Advertisement, AdvertisementStatus } from "@/types/advertisement";
 import { cn } from "@/utils/cn";
 import { advertisementStatusStyles, backToAdvertisements } from "./advertisementOptions";
 
@@ -21,7 +21,7 @@ export const AdvertisementStatusBadge = ({ status }: { status: AdvertisementStat
 };
 
 /** List thumbnail; falls back to an icon tile when there is no creative. */
-export const AdThumbnail = ({ src, className }: { src?: string; className?: string }) => (
+export const AdThumbnail = ({ src, className }: { src?: string | null; className?: string }) => (
   <span
     className={cn(
       "flex h-9 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md border border-gray-200 bg-stone-100 text-gray-400",
@@ -33,7 +33,7 @@ export const AdThumbnail = ({ src, className }: { src?: string; className?: stri
 );
 
 interface AdCreativeCardProps {
-  creative?: string;
+  creative?: string | null;
   advertiser?: string;
   ctaLabel?: string;
   className?: string;
@@ -65,27 +65,35 @@ export const AdCreativeCard = ({ creative, advertiser, ctaLabel, className }: Ad
   </div>
 );
 
-interface EndAdvertisementModalProps {
-  /** The ad to end; the modal is closed while this is undefined. */
-  advertisement?: Advertisement;
+interface ConfirmModalProps {
+  /** The ad to act on; the modal is closed while this is undefined. */
+  advertisement?: AdminAdvertisement;
+  busy?: boolean;
   onClose: () => void;
-  onConfirm: (advertisement: Advertisement) => void;
+  onConfirm: (advertisement: AdminAdvertisement) => void;
 }
 
-export const EndAdvertisementModal = ({ advertisement, onClose, onConfirm }: EndAdvertisementModalProps) => (
-  <WebAppModal open={Boolean(advertisement)} onClose={onClose} title="End advertisement?">
+const ConfirmModal = ({
+  advertisement,
+  busy,
+  onClose,
+  onConfirm,
+  title,
+  body,
+  confirmLabel,
+}: ConfirmModalProps & { title: string; body: string; confirmLabel: string }) => (
+  <WebAppModal open={Boolean(advertisement)} onClose={onClose} title={title}>
     {advertisement && (
       <>
         <p className="text-sm text-gray-600">
-          <span className="font-medium text-gray-900">{advertisement.name}</span> ({advertisement.id}) will stop
-          displaying in the app immediately. Ended advertisements cannot be resumed; they are kept for reference.
+          <span className="font-medium text-gray-900">{advertisement.name}</span> ({advertisement.code}) {body}
         </p>
         <div className="mt-5 flex justify-end gap-3">
-          <WebAppButton variant="outline" onClick={onClose}>
+          <WebAppButton variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </WebAppButton>
-          <WebAppButton variant="danger" onClick={() => onConfirm(advertisement)}>
-            End Advertisement
+          <WebAppButton variant="danger" loading={busy} onClick={() => onConfirm(advertisement)}>
+            {confirmLabel}
           </WebAppButton>
         </div>
       </>
@@ -93,20 +101,61 @@ export const EndAdvertisementModal = ({ advertisement, onClose, onConfirm }: End
   </WebAppModal>
 );
 
-export const AdvertisementNotFound = ({ breadcrumbs }: { breadcrumbs: { label: string; to?: string }[] }) => {
+export const EndAdvertisementModal = (props: ConfirmModalProps) => (
+  <ConfirmModal
+    {...props}
+    title="End advertisement?"
+    body="will stop displaying in the app immediately. Ended advertisements can't be resumed or edited; they are kept for reference."
+    confirmLabel="End Advertisement"
+  />
+);
+
+export const DeleteAdvertisementModal = (props: ConfirmModalProps) => (
+  <ConfirmModal
+    {...props}
+    title="Delete advertisement?"
+    body="will be permanently removed, along with its creative. This can't be undone."
+    confirmLabel="Delete Advertisement"
+  />
+);
+
+interface AdvertisementLoadStateProps {
+  breadcrumbs: { label: string; to?: string }[];
+  error: ApiError | null;
+  loading: boolean;
+  onRetry: () => void;
+}
+
+/** Shown while an advertisement loads, or when it couldn't be loaded / doesn't exist. */
+export const AdvertisementLoadState = ({ breadcrumbs, error, loading, onRetry }: AdvertisementLoadStateProps) => {
   const navigate = useNavigate();
+  const notFound = error?.status === 404 || error?.status === 400;
 
   return (
     <div>
       <WebAppPageHeader breadcrumbs={breadcrumbs} backLink={backToAdvertisements} />
-      <WebAppCard>
-        <WebAppEmptyState
-          icon={<Image className="h-6 w-6" />}
-          title="Advertisement not found"
-          description="This advertisement doesn't exist, or the link is incorrect."
-          primaryAction={{ label: "Back to Advertisement Management", onClick: () => navigate("/advertisements") }}
-        />
-      </WebAppCard>
+      {error ? (
+        <WebAppCard>
+          <WebAppEmptyState
+            icon={notFound ? <Image className="h-6 w-6" /> : <CircleAlert className="h-6 w-6" />}
+            title={notFound ? "Advertisement not found" : "Couldn't load this advertisement"}
+            description={notFound ? "This advertisement doesn't exist, or the link is incorrect." : error.message}
+            primaryAction={
+              notFound
+                ? { label: "Back to Advertisement Management", onClick: () => navigate("/advertisements") }
+                : { label: "Try again", onClick: onRetry }
+            }
+          />
+        </WebAppCard>
+      ) : (
+        <div className="space-y-4" aria-busy={loading} aria-label="Loading advertisement">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="h-80 animate-pulse rounded-xl bg-gray-100" />
+            <div className="h-80 animate-pulse rounded-xl bg-gray-100" />
+          </div>
+          <div className="h-40 animate-pulse rounded-xl bg-gray-100" />
+        </div>
+      )}
     </div>
   );
 };

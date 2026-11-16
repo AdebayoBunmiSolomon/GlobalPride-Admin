@@ -1,7 +1,5 @@
 import * as yup from "yup";
 
-import type { AdvertisementPlacement } from "@/types/advertisement";
-
 const isHttpUrl = (value?: string) => {
   if (!value) return false;
   try {
@@ -32,6 +30,7 @@ export const advertisementSchema = yup.object({
     .required("Please enter the advertiser or business name.")
     .max(80, "Advertiser name must be 80 characters or fewer."),
   description: yup.string().trim().max(280, "Short description must be 280 characters or fewer.").default(""),
+  /** Preview URL of the creative; the file itself is sent separately. */
   creative: yup.string().required("Please upload a creative image."),
   ctaLabel: yup
     .string()
@@ -43,7 +42,7 @@ export const advertisementSchema = yup.object({
     .trim()
     .required("Please enter a destination URL.")
     .test("http-url", "Enter a valid URL starting with http:// or https://.", isHttpUrl),
-  placement: yup.mixed<AdvertisementPlacement>().oneOf(["home_feed"]).required("Please choose a placement."),
+  placement: yup.string().oneOf(["home_feed"], "Please choose a placement.").required("Please choose a placement."),
   startDate: yup.string().required("Please choose a start date."),
   startTime: yup.string().required("Please choose a start time."),
   endDate: yup

@@ -1,10 +1,5 @@
 import { WebAppBadge } from "@/components/Badge";
-import type { CampaignStatus, RecipientStatus } from "@/types/campaign";
-import {
-  campaignStatusStyles,
-  recipientStatusStyles,
-  type BadgeStyle,
-} from "./statusStyles";
+import { getCampaignStatusStyle, getRecipientStatusStyle, type BadgeStyle } from "./statusStyles";
 
 const StyledBadge = ({ style }: { style: BadgeStyle }) => (
   <WebAppBadge dot variant={style.variant} className={style.className}>
@@ -12,10 +7,9 @@ const StyledBadge = ({ style }: { style: BadgeStyle }) => (
   </WebAppBadge>
 );
 
-export const CampaignStatusBadge = ({ status }: { status: CampaignStatus }) => (
-  <StyledBadge style={campaignStatusStyles[status]} />
+export const CampaignStatusBadge = ({ status }: { status: string }) => (
+  <StyledBadge style={getCampaignStatusStyle(status)} />
 );
 
-export const RecipientStatusBadge = ({ status }: { status: RecipientStatus }) => (
-  <StyledBadge style={recipientStatusStyles[status]} />
-);
+export const RecipientStatusBadge = ({ status, label }: { status: string | null; label?: string | null }) =>
+  status ? <StyledBadge style={getRecipientStatusStyle(status, label)} /> : <span className="text-gray-400">—</span>;

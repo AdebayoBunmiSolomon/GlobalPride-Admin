@@ -4,8 +4,8 @@ import { Bell, ChevronDown, Menu, Search } from "lucide-react";
 
 import { WebAppAvatar } from "@/components/Avatar";
 import { WebAppInput } from "@/components/Input";
-import { mockAdmin } from "@/data/mock";
-import { useAuth } from "@/hooks/useAuth";
+import { authService } from "@/api/services/auth";
+import { useCurrentAdmin } from "@/hooks/useAuth";
 
 interface TopbarProps {
   onMenuClick: () => void;
@@ -15,7 +15,7 @@ const menuItemClass = "block w-full px-4 py-2 text-left text-sm hover:bg-gray-50
 
 export const Topbar = ({ onMenuClick }: TopbarProps) => {
   const navigate = useNavigate();
-  const logout = useAuth((state) => state.logout);
+  const admin = useCurrentAdmin();
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -29,7 +29,7 @@ export const Topbar = ({ onMenuClick }: TopbarProps) => {
   }, []);
 
   const handleSignOut = () => {
-    logout();
+    authService.signOut();
     navigate("/", { replace: true });
   };
 
@@ -74,8 +74,8 @@ export const Topbar = ({ onMenuClick }: TopbarProps) => {
             aria-expanded={menuOpen}
             className="flex items-center gap-2 rounded-md py-1 text-sm font-medium text-gray-900"
           >
-            <WebAppAvatar name={mockAdmin.name} size="sm" />
-            <span className="hidden sm:inline">{mockAdmin.name}</span>
+            <WebAppAvatar name={admin.name} size="sm" />
+            <span className="hidden sm:inline">{admin.name}</span>
             <ChevronDown className="h-4 w-4 text-gray-500" />
           </button>
 

@@ -1,23 +1,28 @@
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { Headset, Lock, NotebookPen, Send, User } from "lucide-react";
 
+import type { TicketMessage, TicketPriority, TicketStatus } from "@/api/types/response";
+import { handleApiError } from "@/api/utils";
 import { WebAppCard } from "@/components/Card";
 import { WebAppDetailList } from "@/components/DetailList";
-import { WebAppEmptyState } from "@/components/EmptyState";
 import { WebAppPageHeader } from "@/components/PageHeader";
 import { WebAppSelectInput } from "@/components/Select";
-import { useSupport } from "@/hooks/useSupport";
+import { useCurrentAdmin } from "@/hooks/useAuth";
 import { NoteComposer } from "@/pages/shared/NoteComposer";
-import { RelatedLink, RelatedRecordLink } from "@/pages/shared/RelatedRecordLink";
-import type { TicketMessage, TicketPriority, TicketStatus } from "@/types/support";
+import { RelatedLink } from "@/pages/shared/RelatedRecordLink";
+import { addTicketNote, replyToTicket, setTicketPriority, setTicketStatus, useTicket } from "@/store/supportStore";
+import { appToast } from "@/utils/appToast";
 import { cn } from "@/utils/cn";
-import { formatDateTimeShort } from "@/utils/format";
-import { TicketPriorityBadge, TicketStatusBadge } from "./SupportParts";
+import { formatDateTimeShort, parseApiDate } from "@/utils/format";
+import { ItemLoadState, RefreshButton, TicketPriorityBadge, TicketStatusBadge } from "./SupportParts";
 import {
   backToSupport,
-  ticketCategoryLabels,
+  ticketCategoryLabel,
   ticketPriorityOptions,
+  ticketPriorityStyles,
   ticketStatusOptions,
+  ticketStatusStyles,
 } from "./supportOptions";
 
 const breadcrumbs = [
@@ -25,6 +30,11 @@ const breadcrumbs = [
   { label: "Support", to: "/support" },
   { label: "Ticket Details" },
 ];
+
+/** The API's limit for a reply or note (from the app's ticket message limit). */
+const MESSAGE_MAX_LENGTH = 2000;
+
+const when = (value: string) => (value ? formatDateTimeShort(parseApiDate(value)) : "—");
 
 const RoleChip = ({ children }: { children: string }) => (
   <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">{children}</span>
@@ -47,51 +57,113 @@ const MessageBubble = ({ message }: { message: TicketMessage }) => {
         </p>
         <p className="mt-1.5 text-sm whitespace-pre-wrap text-gray-800">{message.body}</p>
       </div>
-      <p className="mt-1 text-[11px] text-gray-500">{formatDateTimeShort(message.createdAt)}</p>
+      <p className="mt-1 text-[11px] text-gray-500">{when(message.createdAt)}</p>
     </li>
   );
 };
 
+type Busy = "status" | "priority" | null;
+
 export const TicketDetails = () => {
-  const { ticketId } = useParams();
-  const navigate = useNavigate();
-  const ticket = useSupport((state) => state.tickets.find((item) => item.id === ticketId));
-  const { setTicketStatus, setTicketPriority, addTicketReply, addTicketNote } = useSupport();
+  const { ticketId = "" } = useParams();
+  const { data: ticket, error, loading, refresh } = useTicket(ticketId);
+  const { name: adminName } = useCurrentAdmin();
+  const [busy, setBusy] = useState<Busy>(null);
 
   if (!ticket) {
     return (
-      <div>
-        <WebAppPageHeader breadcrumbs={breadcrumbs} backLink={backToSupport} />
-        <WebAppCard>
-          <WebAppEmptyState
-            icon={<Headset className="h-6 w-6" />}
-            title="Ticket not found"
-            description="This support ticket doesn't exist, or the link is incorrect."
-            primaryAction={{ label: "Back to Support", onClick: () => navigate("/support") }}
-          />
-        </WebAppCard>
-      </div>
+      <ItemLoadState
+        breadcrumbs={breadcrumbs}
+        backLink={backToSupport}
+        icon={<Headset className="h-6 w-6" />}
+        noun="Ticket"
+        error={error}
+        loading={loading}
+        onRetry={refresh}
+      />
     );
   }
 
-  // TODO: call the support API once the reply / note / update endpoints exist.
+  // The report's description opens the conversation, unless the API already sends it as the first message.
+  const opening: TicketMessage | null =
+    ticket.description && ticket.messages[0]?.body !== ticket.description
+      ? {
+          id: "description",
+          author: "user",
+          authorName: ticket.userName,
+          body: ticket.description,
+          createdAt: ticket.createdAt,
+        }
+      : null;
+  const conversation = opening ? [opening, ...ticket.messages] : ticket.messages;
+
+  const changeStatus = async (status: TicketStatus) => {
+    if (status === ticket.status) return;
+    setBusy("status");
+    try {
+      const { message } = await setTicketStatus(ticket, status);
+      appToast.show("Status updated", message || `${ticket.reference} is now ${ticketStatusStyles[status].label}.`, "success");
+    } catch (caught) {
+      handleApiError(caught, { fallbackMessage: "We couldn't change the ticket status." });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const changePriority = async (priority: TicketPriority) => {
+    if (priority === ticket.priority) return;
+    setBusy("priority");
+    try {
+      const { message } = await setTicketPriority(ticket, priority);
+      appToast.show(
+        "Priority updated",
+        message || `${ticket.reference} is now ${ticketPriorityStyles[priority].label} priority.`,
+        "success",
+      );
+    } catch (caught) {
+      handleApiError(caught, { fallbackMessage: "We couldn't change the ticket priority." });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Resolves to whether it was sent, so the composer keeps the text on failure. */
+  const send = async (action: typeof replyToTicket, body: string, done: string, fallbackMessage: string) => {
+    try {
+      const { message } = await action(ticket, body, adminName);
+      appToast.show("Sent", message || done, "success");
+      return true;
+    } catch (caught) {
+      handleApiError(caught, { fallbackMessage });
+      return false;
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div>
-        <WebAppPageHeader breadcrumbs={breadcrumbs} backLink={backToSupport} />
+        <WebAppPageHeader
+          breadcrumbs={breadcrumbs}
+          backLink={backToSupport}
+          actions={<RefreshButton label="Refresh ticket" loading={loading} onClick={() => void refresh()} />}
+        />
         <div className="-mt-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-base font-bold text-gray-900">{ticket.id}</span>
+            <span className="text-base font-bold text-gray-900">{ticket.reference}</span>
             <TicketStatusBadge status={ticket.status} />
             <TicketPriorityBadge priority={ticket.priority} />
           </div>
           <h1 className="mt-1 text-3xl leading-tight font-bold text-gray-900">{ticket.subject}</h1>
           <p className="mt-1 text-sm text-gray-500">
             Submitted by{" "}
-            <Link to={`/users/${ticket.userId}`} className="font-medium text-primary hover:underline">
-              {ticket.userName}
-            </Link>{" "}
-            · {ticket.userId}
+            {ticket.userId ? (
+              <Link to={`/users/${encodeURIComponent(ticket.userId)}`} className="font-medium text-primary hover:underline">
+                {ticket.userName}
+              </Link>
+            ) : (
+              <span className="font-medium text-gray-900">{ticket.userName}</span>
+            )}
+            {ticket.userEmail && ticket.userEmail !== ticket.userName && ` · ${ticket.userEmail}`}
           </p>
         </div>
       </div>
@@ -104,11 +176,15 @@ export const TicketDetails = () => {
           bodyClassName="p-0"
           className="overflow-hidden"
         >
-          <ul className="space-y-4 border-b border-gray-200 p-5">
-            {ticket.messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
-            ))}
-          </ul>
+          {conversation.length > 0 ? (
+            <ul className="space-y-4 border-b border-gray-200 p-5">
+              {conversation.map((message) => (
+                <MessageBubble key={message.id} message={message} />
+              ))}
+            </ul>
+          ) : (
+            <p className="border-b border-gray-200 p-5 text-sm text-gray-500">No messages yet.</p>
+          )}
 
           <div className="border-b border-gray-200 p-5">
             <p className="mb-2 text-sm font-medium text-gray-900">Reply to user</p>
@@ -116,11 +192,12 @@ export const TicketDetails = () => {
               id="ticketReply"
               label="Reply to user"
               placeholder="Type your response to the user…"
-              hint="sent to the user"
+              hint="sent to the user in the app, with a notification · moves the ticket to Pending User"
               submitLabel="Send Reply"
               submitIcon={Send}
               variant="primary"
-              onSubmit={(body) => addTicketReply(ticket.id, body)}
+              maxLength={MESSAGE_MAX_LENGTH}
+              onSubmit={(body) => send(replyToTicket, body, "Your reply was sent to the user.", "We couldn't send this reply.")}
             />
           </div>
 
@@ -140,7 +217,7 @@ export const TicketDetails = () => {
                     </p>
                     <p className="mt-1 text-sm whitespace-pre-wrap text-gray-900">{note.body}</p>
                     <p className="mt-1 text-[11px] text-gray-500">
-                      {note.authorName} · {formatDateTimeShort(note.createdAt)}
+                      {note.authorName} · {when(note.createdAt)}
                     </p>
                   </li>
                 ))}
@@ -153,7 +230,8 @@ export const TicketDetails = () => {
               submitLabel="Add Note"
               submitIcon={NotebookPen}
               variant="outline"
-              onSubmit={(body) => addTicketNote(ticket.id, body)}
+              maxLength={MESSAGE_MAX_LENGTH}
+              onSubmit={(body) => send(addTicketNote, body, "Your internal note was added.", "We couldn't add this note.")}
             />
           </div>
         </WebAppCard>
@@ -164,10 +242,10 @@ export const TicketDetails = () => {
               align="right"
               className="-my-3"
               items={[
-                { label: "Ticket ID", value: ticket.id },
-                { label: "Category", value: ticketCategoryLabels[ticket.category] },
-                { label: "Created", value: formatDateTimeShort(ticket.createdAt) },
-                { label: "Last Updated", value: formatDateTimeShort(ticket.updatedAt) },
+                { label: "Reference", value: ticket.reference },
+                { label: "Category", value: ticketCategoryLabel(ticket.category) },
+                { label: "Created", value: when(ticket.createdAt) },
+                { label: "Last Updated", value: when(ticket.updatedAt) },
               ]}
             />
           </WebAppCard>
@@ -180,7 +258,8 @@ export const TicketDetails = () => {
                 labelClassName="text-xs"
                 options={ticketStatusOptions}
                 value={ticket.status}
-                onChange={(value) => setTicketStatus(ticket.id, value as TicketStatus)}
+                disabled={busy !== null}
+                onChange={(value) => void changeStatus(value as TicketStatus)}
               />
               <WebAppSelectInput
                 id="ticketPrioritySelect"
@@ -188,20 +267,32 @@ export const TicketDetails = () => {
                 labelClassName="text-xs"
                 options={ticketPriorityOptions}
                 value={ticket.priority}
-                onChange={(value) => setTicketPriority(ticket.id, value as TicketPriority)}
+                disabled={busy !== null}
+                onChange={(value) => void changePriority(value as TicketPriority)}
               />
               <p className="text-xs text-gray-500">
-                Workflow: Open → In Progress → Pending User → Resolved → Closed.
+                {busy
+                  ? `Saving ${busy}…`
+                  : "Workflow: Open → In Progress → Pending User → Resolved → Closed. Replying moves a ticket to Pending User."}
               </p>
             </div>
           </WebAppCard>
 
-          <WebAppCard title="Related Information" description="Open the related record to investigate further.">
-            <div className="space-y-3">
-              <RelatedLink icon={User} label="User" title={ticket.userName} subtitle={ticket.userId} to={`/users/${ticket.userId}`} />
-              {ticket.related && <RelatedRecordLink record={ticket.related} />}
-            </div>
-          </WebAppCard>
+          {(ticket.userId || ticket.userEmail) && (
+            <WebAppCard title="Related Information" description="Open the related record to investigate further.">
+              {ticket.userId ? (
+                <RelatedLink
+                  icon={User}
+                  label="User"
+                  title={ticket.userName}
+                  subtitle={ticket.userEmail ?? undefined}
+                  to={`/users/${encodeURIComponent(ticket.userId)}`}
+                />
+              ) : (
+                <p className="text-sm text-gray-600">{ticket.userEmail}</p>
+              )}
+            </WebAppCard>
+          )}
         </div>
       </div>
     </div>

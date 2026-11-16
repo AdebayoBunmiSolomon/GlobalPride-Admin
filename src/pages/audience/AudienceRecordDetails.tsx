@@ -1,12 +1,14 @@
 import { useNavigate, useParams } from "react-router-dom";
-import { User, UserX } from "lucide-react";
+import { CircleAlert, User, UserX } from "lucide-react";
 
 import { WebAppCard } from "@/components/Card";
 import { WebAppDetailList } from "@/components/DetailList";
 import { WebAppEmptyState } from "@/components/EmptyState";
 import { WebAppPageHeader } from "@/components/PageHeader";
-import { getRecordStatus, useAudience } from "@/hooks/useAudience";
-import { LocationStatusBadge } from "./LocationStatus";
+import { useAudienceRecord } from "@/store/audienceStore";
+import { formatDateTime, parseApiDate } from "@/utils/format";
+import { genderLabels } from "./audienceOptions";
+import { RefreshButton } from "./audienceShared";
 
 const breadcrumbs = [
   { label: "Dashboard", to: "/dashboard" },
@@ -17,30 +19,40 @@ const breadcrumbs = [
 const backLink = { label: "Back to Audience Marketplace", to: "/audience-marketplace" };
 
 export const AudienceRecordDetails = () => {
-  const { recordId } = useParams();
+  const { recordId = "" } = useParams();
   const navigate = useNavigate();
-  const { states, lgas, records } = useAudience();
-  const record = records.find((item) => item.id === recordId);
+  const { data: record, error, loading, refresh } = useAudienceRecord(recordId);
 
   if (!record) {
+    const notFound = error?.status === 404 || error?.status === 400;
     return (
       <div>
         <WebAppPageHeader breadcrumbs={breadcrumbs} backLink={backLink} />
-        <WebAppCard>
-          <WebAppEmptyState
-            icon={<UserX className="h-6 w-6" />}
-            title="Audience record not found"
-            description="This record may have been removed, or the link is incorrect."
-            primaryAction={{ label: "Back to Audience Marketplace", onClick: () => navigate("/audience-marketplace") }}
-          />
-        </WebAppCard>
+        {error ? (
+          <WebAppCard>
+            <WebAppEmptyState
+              icon={notFound ? <UserX className="h-6 w-6" /> : <CircleAlert className="h-6 w-6" />}
+              title={notFound ? "Audience record not found" : "Couldn't load this record"}
+              description={notFound ? "This record may have been removed, or the link is incorrect." : error.message}
+              primaryAction={
+                notFound
+                  ? { label: "Back to Audience Marketplace", onClick: () => navigate("/audience-marketplace") }
+                  : { label: "Try again", onClick: refresh }
+              }
+            />
+          </WebAppCard>
+        ) : (
+          <div className="space-y-4" aria-busy={loading} aria-label="Loading record">
+            <div className="h-24 animate-pulse rounded-xl bg-gray-100" />
+            <div className="h-72 animate-pulse rounded-xl bg-gray-100" />
+          </div>
+        )}
       </div>
     );
   }
 
-  const stateName = states.find((state) => state.id === record.stateId)?.name ?? "—";
-  const lgaName = lgas.find((lga) => lga.id === record.lgaId)?.name ?? "—";
-  const status = getRecordStatus(record, states, lgas);
+  const name = [record.firstName, record.lastName].filter(Boolean).join(" ") || "Unnamed contact";
+  const location = [record.lga, record.state].filter(Boolean).join(", ");
 
   return (
     <div className="space-y-4">
@@ -52,15 +64,14 @@ export const AudienceRecordDetails = () => {
             <User className="h-5 w-5" />
           </span>
           <div className="min-w-0">
-            <h1 className="truncate text-xl font-bold text-gray-900">
-              {record.firstName} {record.lastName}
-            </h1>
+            <h1 className="truncate text-xl font-bold text-gray-900">{name}</h1>
             <p className="text-sm text-gray-600">
-              {record.phone} · {stateName}
+              {record.phoneNumber}
+              {location && ` · ${location}`}
             </p>
           </div>
         </div>
-        <LocationStatusBadge status={status} />
+        <RefreshButton onClick={refresh} loading={loading} label="Refresh record" />
       </WebAppCard>
 
       <WebAppCard title="Record Information">
@@ -68,13 +79,14 @@ export const AudienceRecordDetails = () => {
           align="right"
           className="-my-3"
           items={[
-            { label: "Phone Number", value: record.phone },
-            { label: "First Name", value: record.firstName },
-            { label: "Last Name", value: record.lastName },
-            { label: "State", value: stateName },
-            { label: "LGA", value: lgaName },
-            { label: "Gender", value: record.gender === "male" ? "Male" : "Female" },
-            { label: "Status", value: status === "active" ? "Active" : "Inactive" },
+            { label: "Record ID", value: record.id },
+            { label: "Phone Number", value: record.phoneNumber },
+            { label: "First Name", value: record.firstName ?? "—" },
+            { label: "Last Name", value: record.lastName ?? "—" },
+            { label: "State", value: record.state ?? "—" },
+            { label: "LGA", value: record.lga ?? "—" },
+            { label: "Gender", value: genderLabels[record.gender] },
+            { label: "Added", value: record.createdAt ? formatDateTime(parseApiDate(record.createdAt)) : "—" },
           ]}
         />
       </WebAppCard>

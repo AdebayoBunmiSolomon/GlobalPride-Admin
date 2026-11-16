@@ -5,14 +5,13 @@ import { WebAppBadge } from "@/components/Badge";
 import { WebAppPageHeader } from "@/components/PageHeader";
 import { WebAppTabs } from "@/components/Tabs";
 import type { BadgeStyle } from "@/pages/campaigns/statusStyles";
-import type { FlagSeverity, FlagSource, FlagStatus } from "@/types/compliance";
+import type { CampaignComplianceStatus, FlagSeverity, FlagSource, FlagStatus } from "@/api/types/response";
 import {
   backToCompliance,
   campaignComplianceStyles,
   flagSeverityStyles,
   flagSources,
   flagStatusStyles,
-  type CampaignComplianceStatus,
 } from "./complianceOptions";
 
 const StyledBadge = ({ style }: { style: BadgeStyle }) => (
@@ -55,10 +54,12 @@ interface CompliancePageHeaderProps {
   description: string;
   /** Breadcrumb label for a sub-section; omit on the Compliance landing tab. */
   section?: string;
+  /** e.g. a refresh button. */
+  actions?: ReactNode;
 }
 
 /** Page header + section tabs shared by every compliance tab. */
-export const CompliancePageHeader = ({ title, description, section }: CompliancePageHeaderProps): ReactNode => (
+export const CompliancePageHeader = ({ title, description, section, actions }: CompliancePageHeaderProps): ReactNode => (
   <div>
     <WebAppPageHeader
       title={title}
@@ -69,6 +70,7 @@ export const CompliancePageHeader = ({ title, description, section }: Compliance
           : [{ label: "Dashboard", to: "/dashboard" }, { label: "Compliance" }]
       }
       backLink={section ? backToCompliance : undefined}
+      actions={actions}
     />
     <div className="-mt-2">
       <WebAppTabs label="Compliance sections" tabs={tabs} />

@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import {
   ArrowLeftRight,
   ChartLine,
-  CircleCheck,
   CirclePlus,
   CircleX,
   Clock,
@@ -21,54 +20,31 @@ import {
   Wallet,
 } from "lucide-react";
 
-import { financeStats, mockWalletLedger } from "@/data/mock";
-import { SignedAmount, TransactionStatusBadge } from "@/pages/wallets/WalletBadges";
-import { transactionStatusStyles, transactionTypes } from "@/pages/wallets/walletOptions";
-import type { WalletLedgerEntry, WalletTransactionType } from "@/types/wallet";
-import { downloadCsv } from "@/utils/csv";
-import { getDateFrom } from "@/utils/dateRange";
-import { formatCompactNaira, formatDate, formatNaira } from "@/utils/format";
+import { serviceLabel, type FinanceReportName } from "@/api/services/finance";
+import type { FinanceReportRow, FinanceServiceRevenue, FinanceSummary } from "@/api/types/response";
+import { WalletStatusBadge } from "@/pages/wallets/WalletBadges";
+import { formatCompactNaira, formatDate, formatNaira, parseApiDate } from "@/utils/format";
 import type { Tone } from "@/utils/tones";
 
 type Icon = ComponentType<{ className?: string }>;
 
-// ── Headline figures ───────────────────────────────────────────────────────
+const money = (value: number | null) => (value === null ? "—" : formatCompactNaira(value));
+const count = (value: number | null) => (value === null ? "—" : value.toLocaleString());
 
-const { vatRate } = financeStats;
+/** Gross revenue, or the sum of the per-service figures when the API sends no total. */
+export const grossRevenue = (summary: FinanceSummary) =>
+  summary.grossRevenue ??
+  (summary.revenueByService.length ? summary.revenueByService.reduce((sum, item) => sum + item.amount, 0) : null);
 
-const revenueLabels: Partial<Record<WalletTransactionType, string>> = {
-  sms_campaign: "SMS Campaigns",
-  image_campaign: "Image Campaigns",
-  audience_rental: "Audience Rental",
-};
-
-const vatOn = (amount: number) => Math.round((amount * vatRate) / 100);
-
-export const revenueBreakdown = financeStats.revenue.map((source) => ({
-  ...source,
-  label: revenueLabels[source.type] ?? transactionTypes[source.type].label,
-  vat: vatOn(source.amount),
-}));
-
-export const revenueTotals = {
-  amount: revenueBreakdown.reduce((sum, source) => sum + source.amount, 0),
-  transactions: revenueBreakdown.reduce((sum, source) => sum + source.transactions, 0),
-  vat: revenueBreakdown.reduce((sum, source) => sum + source.vat, 0),
-};
-
-/** A ledger charge (which includes VAT) split into service amount and VAT. */
-export const splitCharge = (transaction: WalletLedgerEntry) => {
-  const total = Math.abs(transaction.amount);
-  const service = Math.round((total * 100) / (100 + vatRate));
-  return { service, vat: total - service, total };
-};
+/** VAT on a service amount at the summary's rate, when the API didn't send it. */
+export const serviceVat = (summary: FinanceSummary, item: FinanceServiceRevenue) =>
+  item.vat ?? (summary.vatRate === null ? null : Math.round((item.amount * summary.vatRate) / 100));
 
 // ── Report definitions ─────────────────────────────────────────────────────
 
 export interface ReportColumn {
   header: string;
-  cell: (transaction: WalletLedgerEntry) => ReactNode;
-  csv: (transaction: WalletLedgerEntry) => string | number;
+  cell: (row: FinanceReportRow) => ReactNode;
 }
 
 export interface ReportSummaryItem {
@@ -90,18 +66,19 @@ export interface ReportBreakdown {
 export interface FinanceReport {
   /** URL slug: `/finance/reports/:id`. */
   id: string;
+  /** The API's report name. */
+  api: FinanceReportName;
   title: string;
   description: string;
   icon: Icon;
   summaryTitle: string;
-  summary: ReportSummaryItem[];
-  breakdown?: ReportBreakdown;
+  summary: (summary: FinanceSummary) => ReportSummaryItem[];
+  breakdown?: (summary: FinanceSummary) => ReportBreakdown | null;
   activityTitle: string;
   activityDescription: string;
   /** Noun for pagination and empty state, e.g. "revenue transactions". */
   itemLabel: string;
   footnote: string;
-  includes: (transaction: WalletLedgerEntry) => boolean;
   columns: ReportColumn[];
 }
 
@@ -111,151 +88,138 @@ const textLink = (to: string, label: string) => (
   </Link>
 );
 
+const naira = (value: number | null) => (value === null ? "—" : formatNaira(value));
+
 const columns = {
-  id: (header = "Transaction ID"): ReportColumn => ({
-    header,
-    cell: (transaction) => transaction.id,
-    csv: (transaction) => transaction.id,
-  }),
+  reference: (header = "Transaction"): ReportColumn => ({ header, cell: (row) => row.reference }),
   user: {
     header: "User",
-    cell: (transaction) => textLink(`/users/${transaction.userId}`, transaction.userName),
-    csv: (transaction) => transaction.userName,
+    cell: (row) => (row.userId ? textLink(`/users/${encodeURIComponent(row.userId)}`, row.userName) : row.userName),
   } satisfies ReportColumn,
-  service: {
-    header: "Service",
-    cell: (transaction) => transactionTypes[transaction.type].label,
-    csv: (transaction) => transactionTypes[transaction.type].label,
-  } satisfies ReportColumn,
-  serviceAmount: {
-    header: "Service Amount",
-    cell: (transaction) => formatNaira(splitCharge(transaction).service),
-    csv: (transaction) => splitCharge(transaction).service,
-  } satisfies ReportColumn,
-  credit: (header: string): ReportColumn => ({
-    header,
-    cell: (transaction) => <SignedAmount amount={transaction.amount} />,
-    csv: (transaction) => transaction.amount,
-  }),
+  service: { header: "Service", cell: (row) => (row.service ? serviceLabel(row.service) : "—") } satisfies ReportColumn,
+  amount: (header: string): ReportColumn => ({ header, cell: (row) => naira(row.amount) }),
   date: {
     header: "Date",
-    cell: (transaction) => formatDate(transaction.createdAt),
-    csv: (transaction) => transaction.createdAt,
+    cell: (row) => (row.createdAt ? formatDate(parseApiDate(row.createdAt)) : "—"),
   } satisfies ReportColumn,
   status: {
     header: "Status",
-    cell: (transaction) => <TransactionStatusBadge status={transaction.status} />,
-    csv: (transaction) => transactionStatusStyles[transaction.status].label,
+    cell: (row) => (row.status ? <WalletStatusBadge status={row.status} /> : "—"),
   } satisfies ReportColumn,
 };
 
-const isRevenue = (transaction: WalletLedgerEntry) =>
-  transaction.status === "successful" && transaction.type in revenueLabels;
-
-const revenueCards: Record<string, Omit<ReportSummaryItem, "value">> = {
-  sms_campaign: { label: "SMS Campaign Revenue", note: "Campaign charges excluding VAT.", icon: MessageSquare },
-  image_campaign: { label: "Image Campaign Revenue", note: "Campaign charges excluding VAT.", icon: Image, tone: "blue" },
-  audience_rental: { label: "Audience Rental Revenue", note: "Audience rental charges excluding VAT.", icon: Users, tone: "amber" },
-};
-
-const revenueRows = revenueBreakdown.map((source) => [
-  source.label,
-  source.transactions.toLocaleString(),
-  formatCompactNaira(source.amount),
-]);
+const serviceCards: { match: string; label: string; icon: Icon; tone?: Tone }[] = [
+  { match: "sms", label: "SMS Campaign Revenue", icon: MessageSquare },
+  { match: "image", label: "Image Campaign Revenue", icon: Image, tone: "blue" },
+  { match: "audience", label: "Audience Rental Revenue", icon: Users, tone: "amber" },
+];
 
 export const financeReports: FinanceReport[] = [
   {
     id: "revenue",
+    api: "revenue",
     title: "Revenue Report",
     description: "Revenue generated from SMS, Image campaigns and Audience Rental.",
     icon: ChartLine,
     summaryTitle: "Report Summary",
-    summary: [
+    summary: (summary) => [
       {
         label: "Gross Revenue",
-        value: formatCompactNaira(revenueTotals.amount),
+        value: money(grossRevenue(summary)),
         note: "Total recognized service revenue before VAT.",
         icon: ChartLine,
       },
-      ...revenueBreakdown.map(
-        (source): ReportSummaryItem => ({
-          ...revenueCards[source.type],
-          value: formatCompactNaira(source.amount),
-        }),
-      ),
+      ...summary.revenueByService.map((item): ReportSummaryItem => {
+        const card = serviceCards.find((entry) => item.service.toLowerCase().includes(entry.match));
+        return {
+          label: card?.label ?? `${item.label} Revenue`,
+          value: formatCompactNaira(item.amount),
+          note: item.transactions === null ? "Charges excluding VAT." : `${item.transactions.toLocaleString()} transactions, excluding VAT.`,
+          icon: card?.icon ?? ChartLine,
+          tone: card?.tone ?? "gray",
+        };
+      }),
     ],
-    breakdown: {
-      title: "Revenue Breakdown",
-      description: "Revenue generated by active platform services.",
-      columns: ["Revenue Source", "Transactions", "Revenue"],
-      rows: revenueRows,
-      total: ["Gross Revenue", revenueTotals.transactions.toLocaleString(), formatCompactNaira(revenueTotals.amount)],
-    },
+    breakdown: (summary) =>
+      summary.revenueByService.length === 0
+        ? null
+        : {
+            title: "Revenue Breakdown",
+            description: "Revenue generated by active platform services.",
+            columns: ["Revenue Source", "Transactions", "Revenue"],
+            rows: summary.revenueByService.map((item) => [item.label, count(item.transactions), formatCompactNaira(item.amount)]),
+            total: [
+              "Gross Revenue",
+              summary.revenueByService.every((item) => item.transactions !== null)
+                ? summary.revenueByService.reduce((sum, item) => sum + (item.transactions ?? 0), 0).toLocaleString()
+                : "—",
+              money(grossRevenue(summary)),
+            ],
+          },
     activityTitle: "Revenue Activity",
     activityDescription: "Successfully recognized revenue for the selected period.",
     itemLabel: "revenue transactions",
     footnote:
       "Wallet funding, referral bonuses, VAT and failed transactions are excluded from revenue. Voice and Video campaigns are coming soon.",
-    includes: isRevenue,
-    columns: [columns.id(), columns.user, columns.service, columns.serviceAmount, columns.date, columns.status],
+    columns: [columns.reference(), columns.user, columns.service, columns.amount("Service Amount"), columns.date, columns.status],
   },
   {
     id: "vat",
+    api: "vat",
     title: "VAT Report",
     description: "VAT charged on taxable platform services.",
     icon: Percent,
     summaryTitle: "VAT Summary",
-    summary: [
-      { label: "VAT Rate", value: `${vatRate}%`, note: "Applied to taxable platform services.", icon: Percent },
+    summary: (summary) => [
+      {
+        label: "VAT Rate",
+        value: summary.vatRate === null ? "—" : `${summary.vatRate}%`,
+        note: "Applied to taxable platform services.",
+        icon: Percent,
+      },
       {
         label: "Taxable Service Amount",
-        value: formatCompactNaira(revenueTotals.amount),
+        value: money(grossRevenue(summary)),
         note: "Service charge before VAT.",
         icon: Landmark,
         tone: "blue",
       },
       {
         label: "VAT Collected",
-        value: formatCompactNaira(revenueTotals.vat),
+        value: money(summary.vatCollected),
         note: "Tracked separately from platform revenue.",
         icon: ReceiptText,
         tone: "gray",
       },
     ],
-    breakdown: {
-      title: "VAT by Service",
-      description: "Taxable amount and VAT for each active service.",
-      columns: ["Service", "Taxable Amount", "VAT"],
-      rows: revenueBreakdown.map((source) => [
-        source.label,
-        formatCompactNaira(source.amount),
-        formatCompactNaira(source.vat),
-      ]),
-      total: ["Total", formatCompactNaira(revenueTotals.amount), formatCompactNaira(revenueTotals.vat)],
-    },
+    breakdown: (summary) =>
+      summary.revenueByService.length === 0
+        ? null
+        : {
+            title: "VAT by Service",
+            description: "Taxable amount and VAT for each active service.",
+            columns: ["Service", "Taxable Amount", "VAT"],
+            rows: summary.revenueByService.map((item) => [
+              item.label,
+              formatCompactNaira(item.amount),
+              money(serviceVat(summary, item)),
+            ]),
+            total: ["Total", money(grossRevenue(summary)), money(summary.vatCollected)],
+          },
     activityTitle: "VAT Activity",
     activityDescription: "Taxable transactions where VAT was successfully collected.",
     itemLabel: "taxable transactions",
     footnote:
       "Failed charges are never counted as collected VAT. VAT remittance is not tracked by the platform, so no remitted or pending figures are shown.",
-    includes: isRevenue,
     columns: [
-      columns.id(),
+      columns.reference(),
       columns.user,
       columns.service,
-      columns.serviceAmount,
-      {
-        header: "VAT",
-        cell: (transaction) => formatNaira(splitCharge(transaction).vat),
-        csv: (transaction) => splitCharge(transaction).vat,
-      },
+      columns.amount("Service Amount"),
+      { header: "VAT", cell: (row) => naira(row.vat) },
       {
         header: "Total Customer Charge",
-        cell: (transaction) => (
-          <span className="font-semibold text-gray-900">{formatNaira(splitCharge(transaction).total)}</span>
-        ),
-        csv: (transaction) => splitCharge(transaction).total,
+        cell: (row) => <span className="font-semibold text-gray-900">{naira(row.total)}</span>,
       },
       columns.date,
       columns.status,
@@ -263,33 +227,34 @@ export const financeReports: FinanceReport[] = [
   },
   {
     id: "wallet-funding",
+    api: "funding",
     title: "Wallet Funding Report",
     description: "Total wallet funding and funding activity for the selected period.",
     icon: Wallet,
     summaryTitle: "Report Summary",
-    summary: [
+    summary: (summary) => [
       {
         label: "Successful Wallet Funding",
-        value: formatCompactNaira(financeStats.walletFunding.successful),
+        value: money(summary.funding),
         note: "Funding successfully credited to wallets.",
         icon: CirclePlus,
       },
       {
         label: "Funding Transactions",
-        value: financeStats.walletFunding.transactions.toLocaleString(),
-        note: "All funding attempts in the period.",
+        value: count(summary.fundingCount),
+        note: "Funding attempts in the period.",
         icon: ArrowLeftRight,
       },
       {
         label: "Pending Funding",
-        value: formatCompactNaira(financeStats.walletFunding.pending),
+        value: money(summary.fundingPending),
         note: "Awaiting payment confirmation.",
         icon: Clock,
         tone: "amber",
       },
       {
         label: "Failed Funding",
-        value: formatCompactNaira(financeStats.walletFunding.failed),
+        value: money(summary.fundingFailed),
         note: "Payments that did not complete.",
         icon: CircleX,
         tone: "red",
@@ -300,43 +265,39 @@ export const financeReports: FinanceReport[] = [
     itemLabel: "funding transactions",
     footnote:
       "Wallet funding is money added to a user's wallet and is not platform revenue. Individual wallet impact is available in Wallet Management.",
-    includes: (transaction) => transaction.type === "wallet_funding",
     columns: [
-      columns.id(),
+      columns.reference(),
       columns.user,
-      columns.credit("Amount"),
+      columns.amount("Amount"),
       columns.status,
-      {
-        header: "Payment Reference",
-        cell: (transaction) => transaction.payment?.reference ?? "—",
-        csv: (transaction) => transaction.payment?.reference ?? "",
-      },
+      { header: "Payment Reference", cell: (row) => row.paymentReference ?? "—" },
       columns.date,
     ],
   },
   {
     id: "referral-bonuses",
+    api: "referral-bonuses",
     title: "Referral Bonus Report",
     description: "Successful referrals and referral bonuses paid during the selected period.",
     icon: Gift,
     summaryTitle: "Report Summary",
-    summary: [
+    summary: (summary) => [
       {
         label: "Successful Referrals",
-        value: financeStats.referrals.successful.toLocaleString(),
-        note: "Referrals that qualified in the period.",
+        value: count(summary.referralCount),
+        note: "Referrals that earned a bonus in the period.",
         icon: UserCheck,
       },
       {
         label: "Referral Bonuses Paid",
-        value: formatCompactNaira(financeStats.referrals.bonusesPaid),
+        value: money(summary.referralBonuses),
         note: "Credits issued for successful referrals.",
         icon: Gift,
         tone: "blue",
       },
       {
         label: "Users Rewarded",
-        value: financeStats.referrals.usersRewarded.toLocaleString(),
+        value: count(summary.usersRewarded),
         note: "Distinct users who received a bonus.",
         icon: UserStar,
         tone: "gray",
@@ -347,63 +308,45 @@ export const financeReports: FinanceReport[] = [
     itemLabel: "referral bonus records",
     footnote:
       "Referral bonuses are wallet credits issued through the referral programme and are not platform revenue. Referral relationships and qualification rules live in Referral Management.",
-    includes: (transaction) => transaction.type === "referral_bonus",
-    columns: [
-      columns.id(),
-      columns.user,
-      // A bonus is only issued once its referral qualifies, so every row is a successful referral.
-      { header: "Referral Status", cell: () => "Successful Referral", csv: () => "Successful Referral" },
-      columns.credit("Bonus Amount"),
-      columns.date,
-      columns.status,
-    ],
+    columns: [columns.reference(), columns.user, columns.amount("Bonus Amount"), columns.date, columns.status],
   },
   {
     id: "refunds",
+    api: "refunds",
     title: "Refund Report",
     description: "Refund amounts and refund activity for the selected period.",
     icon: Undo2,
     summaryTitle: "Report Summary",
-    summary: [
+    summary: (summary) => [
       {
         label: "Total Refunds",
-        value: formatCompactNaira(financeStats.refunds.total),
+        value: money(summary.refunds),
         note: "Refund amount returned to users.",
         icon: Undo2,
       },
       {
         label: "Number of Refunds",
-        value: financeStats.refunds.count.toLocaleString(),
+        value: count(summary.refundCount),
         note: "Refunds processed in the period.",
         icon: FileText,
         tone: "blue",
-      },
-      {
-        label: "Successful Refunds",
-        value: financeStats.refunds.successful.toLocaleString(),
-        note: "All processed refunds completed.",
-        icon: CircleCheck,
-        tone: "gray",
       },
     ],
     activityTitle: "Refund Activity",
     activityDescription: "Refunds processed during the selected period.",
     itemLabel: "refunds",
-    footnote:
-      "Refunds are returned to the user and are not new revenue. Pending refunds are not currently tracked by the platform.",
-    includes: (transaction) => transaction.type === "refund",
+    footnote: "Refunds are returned to the user and are not new revenue.",
     columns: [
-      columns.id("Refund Transaction"),
+      columns.reference("Refund Transaction"),
       columns.user,
       {
         header: "Original Transaction",
-        cell: (transaction) =>
-          transaction.originalTransactionId
-            ? textLink(`/wallets/transactions/${transaction.originalTransactionId}`, transaction.originalTransactionId)
+        cell: (row) =>
+          row.originalReference
+            ? textLink(`/wallets/transactions/${encodeURIComponent(row.originalReference)}`, row.originalReference)
             : "—",
-        csv: (transaction) => transaction.originalTransactionId ?? "",
       },
-      columns.credit("Refund Amount"),
+      columns.amount("Refund Amount"),
       columns.date,
       columns.status,
     ],
@@ -411,21 +354,3 @@ export const financeReports: FinanceReport[] = [
 ];
 
 export const getFinanceReport = (id?: string) => financeReports.find((report) => report.id === id);
-
-/** Ledger rows for a report within a date range, newest first. */
-export const getReportRows = (report: FinanceReport, period: string) => {
-  const from = getDateFrom(period);
-  return mockWalletLedger
-    .filter((transaction) => report.includes(transaction) && new Date(transaction.createdAt).getTime() >= from)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-};
-
-// TODO: replace with the export endpoint once it exists; this only covers the sample ledger rows.
-export const exportReportCsv = (report: FinanceReport, period: string) => {
-  const rows = getReportRows(report, period);
-  const today = new Date().toISOString().slice(0, 10);
-  downloadCsv(`${report.id}-report-${today}.csv`, [
-    report.columns.map((column) => column.header),
-    ...rows.map((transaction) => report.columns.map((column) => column.csv(transaction))),
-  ]);
-};

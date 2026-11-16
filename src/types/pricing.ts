@@ -1,24 +1,5 @@
-export type ServicePriceStatus = "active" | "coming_soon";
-
-export interface ServicePrice {
-  id: string;
-  name: string;
-  /** Naira per unit. `null` while the service is not yet available. */
-  price: number | null;
-  unit: string;
-  status: ServicePriceStatus;
-}
-
 export type ReferralRewardType = "wallet_credit" | "campaign_credit";
 export type ReferralTrigger = "successful_referral" | "first_campaign" | "first_wallet_funding";
-export type ReferralBonusStatus = "active" | "inactive";
-
-export interface ReferralBonus {
-  amount: number;
-  rewardType: ReferralRewardType;
-  trigger: ReferralTrigger;
-  status: ReferralBonusStatus;
-}
 
 export type DiscountType = "percentage" | "fixed";
 export type PromotionTarget = "sms" | "image" | "audience_rental";

@@ -4,9 +4,9 @@ import { WebAppBadge } from "@/components/Badge";
 import { WebAppButton } from "@/components/Button";
 import { WebAppModal } from "@/components/Modal";
 import type { BadgeStyle } from "@/pages/campaigns/statusStyles";
-import type { NotificationSource, NotificationStatus } from "@/types/notification";
+import type { AnnouncementStatus } from "@/api/types/response";
 import { cn } from "@/utils/cn";
-import { notificationSourceStyles, notificationStatusStyles } from "./notificationOptions";
+import { announcementStatusStyles } from "./notificationOptions";
 
 const StyledBadge = ({ style }: { style: BadgeStyle }) => (
   <WebAppBadge dot variant={style.variant} className={style.className}>
@@ -14,12 +14,8 @@ const StyledBadge = ({ style }: { style: BadgeStyle }) => (
   </WebAppBadge>
 );
 
-export const NotificationSourceBadge = ({ source }: { source: NotificationSource }) => (
-  <StyledBadge style={notificationSourceStyles[source]} />
-);
-
-export const NotificationStatusBadge = ({ status }: { status: NotificationStatus }) => (
-  <StyledBadge style={notificationStatusStyles[status]} />
+export const NotificationStatusBadge = ({ status }: { status: AnnouncementStatus }) => (
+  <StyledBadge style={announcementStatusStyles[status]} />
 );
 
 interface NotificationCardProps {
@@ -58,20 +54,21 @@ export const NotificationCard = ({ title, message, meta, clamp = false, classNam
 
 interface CancelNotificationModalProps {
   open: boolean;
+  busy?: boolean;
   onClose: () => void;
   onConfirm: () => void;
 }
 
-export const CancelNotificationModal = ({ open, onClose, onConfirm }: CancelNotificationModalProps) => (
+export const CancelNotificationModal = ({ open, busy, onClose, onConfirm }: CancelNotificationModalProps) => (
   <WebAppModal open={open} onClose={onClose} title="Cancel Scheduled Notification?">
     <p className="text-sm text-gray-600">
       This notification will not be sent and will remain in your notification history as cancelled.
     </p>
     <div className="mt-5 flex justify-end gap-3">
-      <WebAppButton variant="outline" onClick={onClose}>
+      <WebAppButton variant="outline" onClick={onClose} disabled={busy}>
         Keep Scheduled
       </WebAppButton>
-      <WebAppButton variant="danger" onClick={onConfirm}>
+      <WebAppButton variant="danger" loading={busy} onClick={onConfirm}>
         Cancel Notification
       </WebAppButton>
     </div>

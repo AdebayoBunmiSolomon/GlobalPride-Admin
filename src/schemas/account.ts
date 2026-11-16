@@ -1,10 +1,11 @@
 import * as yup from "yup";
 
-export const passwordRule = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+/** The API\'s "strong password" rule: upper case, lower case, a number and a special character. */
+export const passwordRule = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
 
 /**
  * Pass `context: { requireStrongPasswords }` to the resolver (Settings → Security).
- * Strong: 8+ characters with uppercase, lowercase and a number. Otherwise 8+ characters.
+ * Strong: 8+ characters with uppercase, lowercase, a number and a special character. Otherwise 8+ characters.
  */
 export const changePasswordSchema = yup.object({
   current: yup.string().required("Enter your current password."),

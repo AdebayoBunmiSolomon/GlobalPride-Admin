@@ -1,17 +1,9 @@
+import { createElement } from "react";
+
 import { WebAppBadge } from "@/components/Badge";
-import type { WalletTransactionStatus } from "@/types/wallet";
 import { cn } from "@/utils/cn";
 import { formatNaira } from "@/utils/format";
-import { transactionStatusStyles } from "./walletOptions";
-
-export const TransactionStatusBadge = ({ status }: { status: WalletTransactionStatus }) => {
-  const style = transactionStatusStyles[status];
-  return (
-    <WebAppBadge dot variant={style.variant} className={style.className}>
-      {style.label}
-    </WebAppBadge>
-  );
-};
+import { categoryIcon, walletStatusStyle } from "./walletOptions";
 
 /** Signed naira amount: credits in green with "+", debits plain with "-". */
 export const SignedAmount = ({ amount, className }: { amount: number; className?: string }) => (
@@ -19,3 +11,17 @@ export const SignedAmount = ({ amount, className }: { amount: number; className?
     {formatNaira(amount, { signed: true })}
   </span>
 );
+
+/** Status badge for an API wallet transaction. */
+export const WalletStatusBadge = ({ status }: { status: string }) => {
+  const style = walletStatusStyle(status);
+  return (
+    <WebAppBadge dot variant={style.variant} className={style.className}>
+      {style.label}
+    </WebAppBadge>
+  );
+};
+
+/** Icon for an API transaction category. */
+export const CategoryIcon = ({ category, className }: { category: string; className?: string }) =>
+  createElement(categoryIcon(category), { className });

@@ -1,68 +1,62 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { Megaphone, Search } from "lucide-react";
+import { CircleAlert, Megaphone, Search } from "lucide-react";
 
 import { WebAppCard } from "@/components/Card";
 import { WebAppEmptyState } from "@/components/EmptyState";
 import { WebAppInput } from "@/components/Input";
 import { WebAppPagination } from "@/components/Pagination";
 import { WebAppSelectInput } from "@/components/Select";
-import { mockCampaigns } from "@/data/mock";
-import { useCompliance } from "@/hooks/useCompliance";
-import { formatDateOnly, formatDateTimeShort } from "@/utils/format";
+import { useListParams } from "@/hooks/useListParams";
+import { RefreshButton } from "@/pages/shared/RefreshButton";
+import { ListLoadState } from "@/pages/support/SupportParts";
+import { useFlaggedCampaigns } from "@/store/complianceStore";
+import { formatDateTimeShort, parseApiDate } from "@/utils/format";
 import { CampaignComplianceBadge, CompliancePageHeader } from "./ComplianceParts";
-import { campaignComplianceFilterOptions, campaignComplianceRank, getCampaignCompliance } from "./complianceOptions";
+import { campaignComplianceFilterOptions, campaignComplianceRank } from "./complianceOptions";
 
 const PAGE_SIZE = 10;
 
 const linkClass = "font-medium text-primary hover:underline";
 
+const when = (value: string | null) => (value ? formatDateTimeShort(parseApiDate(value)) : "—");
+
 export const CampaignCompliance = () => {
-  const flags = useCompliance((state) => state.flags);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("all");
-  const [page, setPage] = useState(1);
+  const { get, update, page: requestedPage } = useListParams({ status: "all", page: "1" });
+  const search = get("q");
+  const status = get("status");
+  // Every flagged campaign is fetched once and cached (see src/store); filtering runs in the browser.
+  const { data: campaigns, error, loading, refresh } = useFlaggedCampaigns();
 
-  const records = useMemo(
-    () => mockCampaigns.map((campaign) => ({ campaign, ...getCampaignCompliance(campaign, flags) })),
-    [flags],
-  );
-
-  // TODO: move search / filters / paging to the API once the compliance endpoint exists.
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return records
+    return (campaigns ?? [])
       .filter(
-        (record) =>
-          (status === "all" || record.status === status) &&
+        (campaign) =>
+          (status === "all" || (status === "open" ? campaign.openFlagCount > 0 : campaign.status === status)) &&
           (!query ||
-            [record.campaign.id, record.campaign.name, record.campaign.userName].some((value) =>
-              value.toLowerCase().includes(query),
-            )),
+            [campaign.id, campaign.name, campaign.userName].some((value) => value.toLowerCase().includes(query))),
       )
       .sort(
         (a, b) =>
           campaignComplianceRank[a.status] - campaignComplianceRank[b.status] ||
-          (b.lastReviewed ?? b.campaign.createdAt).localeCompare(a.lastReviewed ?? a.campaign.createdAt),
+          (b.lastFlaggedAt ?? "").localeCompare(a.lastFlaggedAt ?? ""),
       );
-  }, [records, search, status]);
+  }, [campaigns, search, status]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount);
-  const pageRecords = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-
-  const withPageReset = (setter: (value: string) => void) => (value: string) => {
-    setter(value);
-    setPage(1);
-  };
+  const page = Math.min(requestedPage, pageCount);
+  const pageRecords = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const total = campaigns?.length ?? 0;
 
   return (
     <div className="space-y-6">
       <CompliancePageHeader
         title="Campaign Compliance"
-        description="Compliance checks and outcomes associated with campaigns."
+        description="Campaigns that have been flagged at least once, and where their reviews stand."
         section="Campaign Compliance"
+        actions={<RefreshButton label="Refresh campaign compliance" loading={loading} onClick={() => void refresh()} />}
       />
 
       <WebAppCard bodyClassName="p-0">
@@ -74,7 +68,7 @@ export const CampaignCompliance = () => {
             aria-label="Search campaigns"
             leftIcon={<Search className="h-4 w-4" />}
             value={search}
-            onChange={(event) => withPageReset(setSearch)(event.target.value)}
+            onChange={(event) => update({ q: event.target.value, page: null })}
             fullWidth={false}
             containerClassName="w-full sm:w-72"
           />
@@ -82,17 +76,26 @@ export const CampaignCompliance = () => {
             id="campaignComplianceStatus"
             options={campaignComplianceFilterOptions}
             value={status}
-            onChange={withPageReset(setStatus)}
+            onChange={(value) => update({ status: value, page: null })}
             fullWidth={false}
-            containerClassName="w-full sm:w-44"
+            containerClassName="w-full sm:w-52"
           />
         </div>
 
-        {pageRecords.length === 0 ? (
+        {error && campaigns && (
+          <p role="alert" className="flex items-center gap-2 border-b border-gray-200 px-5 py-3 text-sm text-red-600">
+            <CircleAlert className="h-4 w-4" />
+            Couldn't refresh campaigns: {error.message}
+          </p>
+        )}
+
+        {!campaigns ? (
+          <ListLoadState error={error} hasData={false} what="campaign compliance" onRetry={() => void refresh()} />
+        ) : pageRecords.length === 0 ? (
           <WebAppEmptyState
             icon={<Megaphone className="h-6 w-6" />}
-            title="No campaigns found"
-            description="Try a different search term or filter."
+            title={total === 0 ? "No flagged campaigns" : "No campaigns found"}
+            description={total === 0 ? "Campaigns appear here once they have been flagged." : "Try a different search term or filter."}
           />
         ) : (
           <div className="overflow-x-auto">
@@ -102,34 +105,44 @@ export const CampaignCompliance = () => {
                   <th scope="col" className="px-5 py-3 font-semibold">Campaign</th>
                   <th scope="col" className="px-5 py-3 font-semibold">User</th>
                   <th scope="col" className="px-5 py-3 font-semibold">Compliance Status</th>
-                  <th scope="col" className="px-5 py-3 font-semibold">Flag Count</th>
+                  <th scope="col" className="px-5 py-3 font-semibold">Flags (Open)</th>
+                  <th scope="col" className="px-5 py-3 font-semibold">Last Flagged</th>
                   <th scope="col" className="px-5 py-3 font-semibold">Last Reviewed</th>
                   <th scope="col" className="px-5 py-3 font-semibold">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {pageRecords.map(({ campaign, status: complianceStatus, flagCount, lastReviewed }) => (
+                {pageRecords.map((campaign) => (
                   <tr key={campaign.id} className="hover:bg-gray-50/60">
                     <td className="px-5 py-3.5">
                       <p className="font-medium text-gray-900">{campaign.name}</p>
                       <p className="text-xs text-gray-500">{campaign.id}</p>
                     </td>
                     <td className="px-5 py-3.5 whitespace-nowrap">
-                      <Link to={`/users/${campaign.userId}`} className={linkClass}>
-                        {campaign.userName}
+                      {campaign.userId ? (
+                        <Link to={`/users/${encodeURIComponent(campaign.userId)}`} className={linkClass}>
+                          {campaign.userName}
+                        </Link>
+                      ) : (
+                        campaign.userName
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <CampaignComplianceBadge status={campaign.status} />
+                    </td>
+                    <td className="px-5 py-3.5 text-gray-900">
+                      {campaign.flagCount}
+                      {campaign.openFlagCount > 0 && <span className="text-gray-500"> ({campaign.openFlagCount})</span>}
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-gray-700">{when(campaign.lastFlaggedAt)}</td>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-gray-700">{when(campaign.lastReviewedAt)}</td>
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      <Link to={`/campaigns/${encodeURIComponent(campaign.id)}`} className={linkClass}>
+                        Campaign
                       </Link>
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <CampaignComplianceBadge status={complianceStatus} />
-                    </td>
-                    <td className="px-5 py-3.5 text-gray-900">{flagCount}</td>
-                    <td className="px-5 py-3.5 whitespace-nowrap text-gray-700">
-                      {/* Unflagged campaigns were checked automatically when created. */}
-                      {lastReviewed ? formatDateTimeShort(lastReviewed) : formatDateOnly(campaign.createdAt)}
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <Link to={`/campaigns/${campaign.id}`} className={linkClass}>
-                        View
+                      <span className="mx-1.5 text-gray-300">·</span>
+                      <Link to={`/compliance?q=${encodeURIComponent(campaign.id)}`} className={linkClass}>
+                        Flags
                       </Link>
                     </td>
                   </tr>
@@ -142,11 +155,11 @@ export const CampaignCompliance = () => {
         {filtered.length > 0 && (
           <WebAppPagination
             className="border-t border-gray-200 px-5 py-4"
-            page={currentPage}
+            page={page}
             pageSize={PAGE_SIZE}
             total={filtered.length}
-            onPageChange={setPage}
-            itemLabel="records"
+            onPageChange={(next) => update({ page: next })}
+            itemLabel="campaigns"
           />
         )}
       </WebAppCard>

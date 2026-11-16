@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
-import { Bell, CircleCheck, Info, Settings, ShieldCheck } from "lucide-react";
+import { Bell, CircleAlert, CircleCheck, Info, Settings, ShieldCheck } from "lucide-react";
+
+import type { ApiError } from "@/api/types/response";
+import { WebAppCard } from "@/components/Card";
+import { WebAppEmptyState } from "@/components/EmptyState";
 
 import { WebAppButton } from "@/components/Button";
 import { WebAppPageHeader } from "@/components/PageHeader";
@@ -86,3 +90,21 @@ export const SettingsFooter = ({ dirty, saved, submitting, onCancel }: SettingsF
     </WebAppButton>
   </div>
 );
+
+/** Shown in place of a settings form until the settings have loaded (or when they couldn't be). */
+export const SettingsLoadState = ({ error, onRetry }: { error: ApiError | null; onRetry: () => void }) =>
+  error ? (
+    <WebAppCard>
+      <WebAppEmptyState
+        icon={<CircleAlert className="h-6 w-6" />}
+        title="Couldn't load the settings"
+        description={error.message}
+        primaryAction={{ label: "Try again", onClick: onRetry }}
+      />
+    </WebAppCard>
+  ) : (
+    <div className="space-y-4" aria-busy="true" aria-label="Loading settings">
+      <div className="h-48 animate-pulse rounded-xl bg-gray-100" />
+      <div className="h-32 animate-pulse rounded-xl bg-gray-100" />
+    </div>
+  );

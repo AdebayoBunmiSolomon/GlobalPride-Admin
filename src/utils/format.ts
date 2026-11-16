@@ -98,3 +98,15 @@ export const formatDateTimeShort = (value: string | Date) => {
   const date = new Date(value);
   return `${dateFormatter.format(date)}, ${timeFormatter.format(date)}`;
 };
+
+/**
+ * Reads an API timestamp. Some endpoints send UTC times without an offset
+ * ("2026-11-12T23:58:52.91"), which `new Date` would read as local time.
+ */
+export const parseApiDate = (value: string) =>
+  new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(value) || !value.includes("T") ? value : `${value}Z`);
+
+const shortDayFormatter = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+
+/** Date-only "2026-10-18" → "Oct 18". */
+export const formatShortDay = (value: string) => shortDayFormatter.format(new Date(`${value}T00:00:00`));

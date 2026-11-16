@@ -1,6 +1,5 @@
-import { mockWalletLedger } from "@/data/mock";
+import type { AdminReferral, ReferralBonusStatus, ReferralStatus } from "@/api/types/response";
 import type { BadgeStyle } from "@/pages/campaigns/statusStyles";
-import type { Referral, ReferralBonusStatus, ReferralStatus } from "@/types/referral";
 
 export const referralStatusStyles: Record<ReferralStatus, BadgeStyle> = {
   pending: { label: "Pending", variant: "warning", className: "text-amber-700" },
@@ -23,17 +22,13 @@ export const bonusStatusOptions = [
   ...Object.entries(bonusStatusStyles).map(([value, { label }]) => ({ label, value })),
 ];
 
+/** Who was referred: the signed-up user's name, else the invited contact. */
+export const referredLabel = (referral: AdminReferral) =>
+  referral.referredUserName ?? referral.inviteeContact ?? "—";
+
 /**
- * A referral's bonus, from its wallet transaction. Until a bonus is issued the
- * amount is the currently configured bonus (`configuredAmount`).
+ * The referral's bonus amount; until the API reports one, a pending referral
+ * shows the currently configured bonus (`configuredAmount`, null while loading).
  */
-export const getReferralBonus = (referral: Referral, configuredAmount: number) => {
-  const transaction = referral.bonusTransactionId
-    ? mockWalletLedger.find((item) => item.id === referral.bonusTransactionId)
-    : undefined;
-
-  const status: ReferralBonusStatus =
-    transaction?.status === "successful" ? "paid" : transaction?.status === "failed" ? "failed" : "pending";
-
-  return { status, amount: transaction?.amount ?? configuredAmount, transaction };
-};
+export const bonusAmountOf = (referral: AdminReferral, configuredAmount: number | null) =>
+  referral.bonusAmount ?? (referral.bonusStatus === "pending" ? configuredAmount : null);

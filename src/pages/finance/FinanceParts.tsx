@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CalendarDays, ChevronDown, Download } from "lucide-react";
 
+import type { FinanceRange } from "@/api/services/finance";
 import { WebAppButton } from "@/components/Button";
 import { WebAppSelectInput } from "@/components/Select";
 import { dateRangeOptions } from "@/utils/dateRange";
-import { exportReportCsv, financeReports } from "./reports";
+import { exportReportCsv } from "./exportReport";
+import { financeReports } from "./reports";
 
 export const PeriodSelect = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
   <WebAppSelectInput
@@ -21,7 +23,7 @@ export const PeriodSelect = ({ value, onChange }: { value: string; onChange: (va
 );
 
 /** "Export Report" button with a menu of every report's CSV. */
-export const ExportReportMenu = ({ period }: { period: string }) => {
+export const ExportReportMenu = ({ range }: { range: FinanceRange }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
 
@@ -59,7 +61,7 @@ export const ExportReportMenu = ({ period }: { period: string }) => {
               type="button"
               role="menuitem"
               onClick={() => {
-                exportReportCsv(report, period);
+                void exportReportCsv(report, range);
                 setOpen(false);
               }}
               className="flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"

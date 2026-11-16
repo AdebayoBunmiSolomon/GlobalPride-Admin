@@ -1,27 +1,34 @@
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, ChartLine, Download, Gift, Percent, Undo2 } from "lucide-react";
+import { ArrowRight, ChartLine, CircleAlert, Download, Gift, Percent, Undo2 } from "lucide-react";
 
 import { WebAppButton } from "@/components/Button";
 import { WebAppCard } from "@/components/Card";
 import { WebAppDetailList } from "@/components/DetailList";
 import { WebAppPageHeader } from "@/components/PageHeader";
 import { WebAppStatCard } from "@/components/StatCard";
-import { financeStats } from "@/data/mock";
+import { RevenueChart } from "@/pages/dashboard/charts";
+import { RefreshButton } from "@/pages/shared/RefreshButton";
+import { useFinanceSummary } from "@/store/financeStore";
 import { formatCompactNaira, formatNaira } from "@/utils/format";
+import { exportReportCsv } from "./exportReport";
 import { BreakdownTable, ExportReportMenu, PeriodSelect } from "./FinanceParts";
 import { useReportPeriod } from "./useReportPeriod";
-import { exportReportCsv, financeReports, revenueBreakdown, revenueTotals } from "./reports";
-
-const { vatRate } = financeStats;
+import { financeReports, grossRevenue } from "./reports";
 
 // Illustrates how a customer charge is split; not tied to a real transaction.
 const EXAMPLE_SUBTOTAL = 4000;
-const exampleVat = Math.round((EXAMPLE_SUBTOTAL * vatRate) / 100);
 
 export const Finance = () => {
   const navigate = useNavigate();
-  const { period, setPeriod, withPeriod } = useReportPeriod();
+  const { period, range, setPeriod, withPeriod } = useReportPeriod();
+  const { data: summary, error, loading, refresh } = useFinanceSummary(range);
   const reportPath = (id: string) => withPeriod(`/finance/reports/${id}`);
+
+  const money = (value: number | null | undefined) =>
+    value === undefined ? "…" : value === null ? "—" : formatCompactNaira(value);
+  const gross = summary ? grossRevenue(summary) : undefined;
+  const vatRate = summary?.vatRate ?? null;
+  const exampleVat = vatRate === null ? null : Math.round((EXAMPLE_SUBTOTAL * vatRate) / 100);
 
   return (
     <div className="space-y-6">
@@ -32,41 +39,58 @@ export const Finance = () => {
         actions={
           <div className="flex flex-wrap items-center gap-3">
             <PeriodSelect value={period} onChange={setPeriod} />
-            <ExportReportMenu period={period} />
+            <RefreshButton label="Refresh finance summary" loading={loading} onClick={() => void refresh()} />
+            <ExportReportMenu range={range} />
           </div>
         }
       />
 
+      {error && (
+        <p role="alert" className="flex items-center gap-2 text-sm text-red-600">
+          <CircleAlert className="h-4 w-4" />
+          Couldn't load the finance summary: {error.message}
+          <button type="button" onClick={() => void refresh()} className="font-medium underline">
+            Try again
+          </button>
+        </p>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <WebAppStatCard
           label="Gross Revenue"
-          value={formatCompactNaira(revenueTotals.amount)}
-          note="Revenue generated from SMS, Image campaigns and Audience Rental."
+          value={money(gross)}
+          note="Revenue from SMS, Image campaigns and Audience Rental, before VAT."
           icon={ChartLine}
           to={reportPath("revenue")}
         />
         <WebAppStatCard
           label="VAT Collected"
-          value={formatCompactNaira(revenueTotals.vat)}
+          value={money(summary ? summary.vatCollected : undefined)}
           note="VAT charged on taxable platform services."
           icon={Percent}
           to={reportPath("vat")}
         />
         <WebAppStatCard
           label="Refunds"
-          value={formatCompactNaira(financeStats.refunds.total)}
+          value={money(summary ? summary.refunds : undefined)}
           note="Refunds processed during the selected period."
           icon={Undo2}
           to={reportPath("refunds")}
         />
         <WebAppStatCard
           label="Referral Bonuses Paid"
-          value={formatCompactNaira(financeStats.referrals.bonusesPaid)}
+          value={money(summary ? summary.referralBonuses : undefined)}
           note="Referral credits issued to users."
           icon={Gift}
           to={reportPath("referral-bonuses")}
         />
       </div>
+
+      {summary && summary.series.length > 1 && (
+        <WebAppCard title="Daily Revenue" description="Service revenue per day for the selected period (at most the last 90 days are charted).">
+          <RevenueChart data={summary.series.slice(-90)} className="h-56" />
+        </WebAppCard>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <WebAppCard
@@ -76,11 +100,21 @@ export const Finance = () => {
           className="lg:col-span-2"
           bodyClassName="p-0"
         >
-          <BreakdownTable
-            columns={["Revenue Source", "Amount"]}
-            rows={revenueBreakdown.map((source) => [source.label, formatCompactNaira(source.amount)])}
-            total={["Gross Revenue", formatCompactNaira(revenueTotals.amount)]}
-          />
+          {!summary ? (
+            <div className="space-y-3 p-5" aria-busy={loading} aria-label="Loading revenue breakdown">
+              {Array.from({ length: 3 }, (_, index) => (
+                <div key={index} className="h-8 animate-pulse rounded bg-gray-100" />
+              ))}
+            </div>
+          ) : summary.revenueByService.length === 0 ? (
+            <p className="px-5 py-6 text-sm text-gray-500">No revenue was recorded in this period.</p>
+          ) : (
+            <BreakdownTable
+              columns={["Revenue Source", "Amount"]}
+              rows={summary.revenueByService.map((item) => [item.label, formatCompactNaira(item.amount)])}
+              total={["Gross Revenue", money(gross)]}
+            />
+          )}
           <p className="border-t border-gray-200 px-5 py-3 text-xs text-gray-500">
             Voice and Video campaigns are coming soon and are not included. Wallet funding, referral bonuses and VAT
             are not revenue.
@@ -92,27 +126,29 @@ export const Finance = () => {
             align="right"
             className="-my-3"
             items={[
-              { label: "VAT Rate", value: `${vatRate}%` },
-              { label: "Taxable Service Amount", value: formatCompactNaira(revenueTotals.amount) },
-              { label: "VAT Collected", value: formatCompactNaira(revenueTotals.vat) },
+              { label: "VAT Rate", value: !summary ? "…" : vatRate === null ? "—" : `${vatRate}%` },
+              { label: "Taxable Service Amount", value: money(gross) },
+              { label: "VAT Collected", value: money(summary ? summary.vatCollected : undefined) },
             ]}
           />
 
-          <div className="mt-5 space-y-1 rounded-lg bg-stone-50 px-4 py-3 text-xs text-gray-600">
-            <p className="mb-2 font-medium text-gray-900">Example: how a customer charge is split</p>
-            <p className="flex justify-between">
-              <span>Service Subtotal</span>
-              <span>{formatNaira(EXAMPLE_SUBTOTAL)}</span>
-            </p>
-            <p className="flex justify-between">
-              <span>VAT at {vatRate}%</span>
-              <span>{formatNaira(exampleVat)}</span>
-            </p>
-            <p className="flex justify-between font-semibold text-gray-900">
-              <span>Total Customer Charge</span>
-              <span>{formatNaira(EXAMPLE_SUBTOTAL + exampleVat)}</span>
-            </p>
-          </div>
+          {vatRate !== null && exampleVat !== null && (
+            <div className="mt-5 space-y-1 rounded-lg bg-stone-50 px-4 py-3 text-xs text-gray-600">
+              <p className="mb-2 font-medium text-gray-900">Example: how a customer charge is split</p>
+              <p className="flex justify-between">
+                <span>Service Subtotal</span>
+                <span>{formatNaira(EXAMPLE_SUBTOTAL)}</span>
+              </p>
+              <p className="flex justify-between">
+                <span>VAT at {vatRate}%</span>
+                <span>{formatNaira(exampleVat)}</span>
+              </p>
+              <p className="flex justify-between font-semibold text-gray-900">
+                <span>Total Customer Charge</span>
+                <span>{formatNaira(EXAMPLE_SUBTOTAL + exampleVat)}</span>
+              </p>
+            </div>
+          )}
 
           <p className="mt-4 text-xs text-gray-500">
             VAT collected is tracked separately from platform revenue. Collection and remittance are separate
@@ -124,7 +160,7 @@ export const Finance = () => {
       <WebAppCard
         divided
         title="Reports"
-        description="Downloadable financial reports for the selected period."
+        description="Financial reports for the selected period. Exports download from the server (at most 50,000 rows)."
         bodyClassName="p-0"
       >
         <ul className="divide-y divide-gray-100">
@@ -151,7 +187,7 @@ export const Finance = () => {
                   variant="outline"
                   className="h-9 border-gray-200 text-sm"
                   leftIcon={<Download className="h-4 w-4" />}
-                  onClick={() => exportReportCsv(report, period)}
+                  onClick={() => void exportReportCsv(report, range)}
                 >
                   Export CSV
                 </WebAppButton>

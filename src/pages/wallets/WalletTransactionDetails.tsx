@@ -1,19 +1,18 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Clock, Info, ReceiptText } from "lucide-react";
+import { CircleAlert, Clock, Info, ReceiptText, RefreshCw } from "lucide-react";
 
+import type { AdminWalletTransactionDetails } from "@/api/types/response";
 import { WebAppCard } from "@/components/Card";
 import { WebAppDetailList } from "@/components/DetailList";
 import { WebAppEmptyState } from "@/components/EmptyState";
 import { WebAppNote } from "@/components/Note";
 import { WebAppPageHeader } from "@/components/PageHeader";
-import { mockWalletLedger } from "@/data/mock";
-import { usePricing } from "@/hooks/usePricing";
-import { triggerLabels } from "@/pages/pricing/pricingOptions";
-import type { WalletLedgerEntry, WalletTransactionStatus } from "@/types/wallet";
-import { formatLongDateTime, formatNaira } from "@/utils/format";
-import { SignedAmount, TransactionStatusBadge } from "./WalletBadges";
-import { paymentMethodLabels, transactionStatusStyles, transactionTypes } from "./walletOptions";
+import { useWalletTransaction } from "@/store/walletsStore";
+import { cn } from "@/utils/cn";
+import { formatLongDateTime, formatNaira, parseApiDate } from "@/utils/format";
+import { CategoryIcon, SignedAmount, WalletStatusBadge } from "./WalletBadges";
+import { paymentMethodLabel, signedAmount, walletStatusStyle } from "./walletOptions";
 
 const breadcrumbs = [
   { label: "Dashboard", to: "/dashboard" },
@@ -23,149 +22,119 @@ const breadcrumbs = [
 
 const backLink = { label: "Back to Transactions", to: "/wallets" };
 
-const bonusStatusLabels: Record<WalletTransactionStatus, string> = {
-  successful: "Issued",
-  pending: "Pending",
-  failed: "Failed",
-  refunded: "Reversed",
-};
-
-type DetailItem = { label: string; value: ReactNode };
-
 const TextLink = ({ to, children }: { to: string; children: ReactNode }) => (
   <Link to={to} className="text-primary hover:underline">
     {children}
   </Link>
 );
 
-const creditLabels: Partial<Record<WalletLedgerEntry["type"], string>> = {
-  wallet_funding: "Amount Funded",
-  referral_bonus: "Bonus Credited",
-  refund: "Refund Amount",
-};
+const when = (value: string | null) => (value ? formatLongDateTime(parseApiDate(value)) : "—");
 
-/** Balance rows (and an explanatory note) for how a transaction changed the user's wallet. */
-const getWalletImpact = (
-  transaction: WalletLedgerEntry,
-  refund?: WalletLedgerEntry,
-): { items: DetailItem[]; note?: { icon: ReactNode; text: ReactNode } } => {
-  const { amount, previousBalance, status } = transaction;
-  const isCredit = amount > 0;
-  const previous = { label: "Previous Balance", value: formatNaira(previousBalance) };
-  const links: DetailItem[] = [];
-
-  if (transaction.campaignId) {
-    links.push({
-      label: "Campaign ID",
-      value: <TextLink to={`/campaigns/${transaction.campaignId}`}>{transaction.campaignId}</TextLink>,
-    });
-  }
-  if (transaction.originalTransactionId) {
-    links.push({
-      label: "Original Transaction",
-      value: (
-        <TextLink to={`/wallets/transactions/${transaction.originalTransactionId}`}>
-          {transaction.originalTransactionId}
-        </TextLink>
-      ),
-    });
-  }
-
-  if (status === "pending") {
+/** Why the balance did or didn't change, for transactions that haven't completed. */
+const impactNote = ({ status, direction }: AdminWalletTransactionDetails) => {
+  if (status === "pending" || status === "processing") {
     return {
-      items: [
-        previous,
-        isCredit
-          ? { label: "Pending Amount", value: <SignedAmount amount={amount} /> }
-          : { label: "Pending Deduction", value: <SignedAmount amount={amount} /> },
-        { label: "Current Balance", value: formatNaira(previousBalance) },
-        ...links,
-      ],
-      note: {
-        icon: <Clock className="h-3.5 w-3.5" />,
-        text: "This transaction has not been completed yet. The wallet balance will update once it completes.",
-      },
+      icon: <Clock />,
+      text:
+        direction === "credit"
+          ? "This funding hasn't been confirmed by the payment provider yet. The wallet is credited once it succeeds."
+          : "This transaction hasn't completed yet. The wallet balance updates once it does.",
     };
   }
-
-  if (status === "failed") {
+  if (status === "failed" || status === "cancelled") {
     return {
-      items: [
-        previous,
-        { label: isCredit ? "Attempted Credit" : "Attempted Deduction", value: formatNaira(Math.abs(amount)) },
-        { label: isCredit ? "Actual Credit" : "Actual Deduction", value: formatNaira(0) },
-        { label: "Current Balance", value: formatNaira(previousBalance) },
-        ...links,
-      ],
-      note: {
-        icon: <Info className="h-3.5 w-3.5" />,
-        text: `This transaction failed, so the expected wallet ${isCredit ? "credit" : "deduction"} did not complete and the balance remains unchanged.`,
-      },
+      icon: <Info />,
+      text: `This transaction ${status === "failed" ? "failed" : "was cancelled"}, so the wallet ${direction === "credit" ? "was not credited" : "was not charged"}.`,
     };
   }
-
-  const items: DetailItem[] = [
-    previous,
-    {
-      label: isCredit ? (creditLabels[transaction.type] ?? "Amount Credited") : "Amount Deducted",
-      value: <SignedAmount amount={amount} />,
-    },
-    { label: "New Balance", value: formatNaira(previousBalance + amount) },
-    ...links,
-  ];
-
-  // A deduction that was later refunded points to its refund.
-  if (status === "refunded" && !isCredit && refund) {
-    items.push({
-      label: "Refund Transaction",
-      value: <TextLink to={`/wallets/transactions/${refund.id}`}>{refund.id}</TextLink>,
-    });
-    return {
-      items,
-      note: {
-        icon: <Info className="h-3.5 w-3.5" />,
-        text: `This deduction was refunded to the user's wallet in ${refund.id}.`,
-      },
-    };
-  }
-
-  return { items };
+  return null;
 };
 
 export const WalletTransactionDetails = () => {
-  const { transactionId } = useParams();
+  const { transactionId = "" } = useParams();
   const navigate = useNavigate();
-  const referralTrigger = usePricing((state) => state.referralBonus.trigger);
-  const transaction = mockWalletLedger.find((item) => item.id === transactionId);
+  const { data: transaction, error, loading, refresh } = useWalletTransaction(transactionId);
 
   if (!transaction) {
+    const notFound = error?.status === 404 || error?.status === 400;
     return (
       <div>
         <WebAppPageHeader breadcrumbs={breadcrumbs} backLink={backLink} />
-        <WebAppCard>
-          <WebAppEmptyState
-            icon={<ReceiptText className="h-6 w-6" />}
-            title="Transaction not found"
-            description="This transaction doesn't exist, or the link is incorrect."
-            primaryAction={{ label: "Back to Transactions", onClick: () => navigate("/wallets") }}
-          />
-        </WebAppCard>
+        {error ? (
+          <WebAppCard>
+            <WebAppEmptyState
+              icon={notFound ? <ReceiptText className="h-6 w-6" /> : <CircleAlert className="h-6 w-6" />}
+              title={notFound ? "Transaction not found" : "Couldn't load this transaction"}
+              description={notFound ? "This transaction doesn't exist, or the link is incorrect." : error.message}
+              primaryAction={
+                notFound
+                  ? { label: "Back to Transactions", onClick: () => navigate("/wallets") }
+                  : { label: "Try again", onClick: refresh }
+              }
+            />
+          </WebAppCard>
+        ) : (
+          <div className="space-y-4" aria-busy={loading} aria-label="Loading transaction">
+            <div className="h-24 animate-pulse rounded-xl bg-gray-100" />
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="h-80 animate-pulse rounded-xl bg-gray-100" />
+              <div className="h-80 animate-pulse rounded-xl bg-gray-100" />
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
-  const refund = mockWalletLedger.find((item) => item.originalTransactionId === transaction.id);
-  const impact = getWalletImpact(transaction, refund);
-  const statusLabel = transactionStatusStyles[transaction.status].label;
+  const note = impactNote(transaction);
+  const isFunding = transaction.category === "funding";
+  const card = transaction.cardLast4
+    ? `${transaction.cardType ?? "Card"} •••• ${transaction.cardLast4}`
+    : transaction.cardType;
 
   return (
     <div className="space-y-4">
-      <WebAppPageHeader
-        title="Transaction Details"
-        description="View transaction information and wallet impact."
-        breadcrumbs={breadcrumbs}
-        backLink={backLink}
-      />
+      <WebAppPageHeader breadcrumbs={breadcrumbs} backLink={backLink} />
+
+      <WebAppCard bodyClassName="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-4">
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <CategoryIcon category={transaction.category} className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-xl font-bold text-gray-900">{transaction.type}</h1>
+              <WalletStatusBadge status={transaction.status} />
+            </div>
+            <p className="mt-1 text-sm text-gray-600">
+              {transaction.id} ·{" "}
+              <Link to={`/users/${transaction.userId}`} className="font-medium text-gray-900 hover:underline">
+                {transaction.userName}
+              </Link>{" "}
+              · {when(transaction.createdAt)}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <SignedAmount amount={signedAmount(transaction)} className="text-2xl font-bold" />
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={loading}
+            aria-label="Refresh transaction"
+            title="Refresh"
+            className="rounded-lg border border-gray-200 p-2 text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+          </button>
+        </div>
+      </WebAppCard>
+
+      {transaction.description && (
+        <WebAppNote icon={<Info />} className="text-sm">
+          {transaction.description}
+        </WebAppNote>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <WebAppCard title="Transaction Information">
@@ -173,73 +142,71 @@ export const WalletTransactionDetails = () => {
             align="right"
             className="-my-3"
             items={[
-              { label: "Transaction ID", value: transaction.id },
-              {
-                label: "User",
-                value: <TextLink to={`/users/${transaction.userId}`}>{transaction.userName}</TextLink>,
-              },
-              { label: "Transaction Type", value: transactionTypes[transaction.type].label },
-              { label: "Amount", value: <SignedAmount amount={transaction.amount} /> },
-              { label: "Status", value: <TransactionStatusBadge status={transaction.status} /> },
-              { label: "Date & Time", value: formatLongDateTime(transaction.createdAt) },
+              { label: "Reference", value: transaction.id },
+              { label: "Transaction GUID", value: <span className="break-all">{transaction.transactionGuid}</span> },
+              { label: "User", value: <TextLink to={`/users/${transaction.userId}`}>{transaction.userName}</TextLink> },
+              { label: "Transaction Type", value: transaction.type },
+              { label: "Direction", value: transaction.direction === "credit" ? "Credit" : "Debit" },
+              { label: "Amount", value: <SignedAmount amount={signedAmount(transaction)} /> },
+              { label: "Status", value: <WalletStatusBadge status={transaction.status} /> },
+              { label: "Created", value: when(transaction.createdAt) },
+              { label: "Last Updated", value: when(transaction.updatedAt) },
             ]}
           />
         </WebAppCard>
 
         <WebAppCard title="Wallet Impact">
-          <WebAppDetailList align="right" className="-my-3" items={impact.items} />
-          {impact.note && (
-            <WebAppNote icon={impact.note.icon} className="mt-4">
-              {impact.note.text}
-            </WebAppNote>
-          )}
+          <WebAppDetailList
+            align="right"
+            className="-my-3"
+            items={[
+              { label: "Amount Credited", value: formatNaira(transaction.amountCredited) },
+              { label: "Amount Deducted", value: formatNaira(transaction.amountDeducted) },
+              { label: "User's Current Balance", value: formatNaira(transaction.currentWalletBalance) },
+              ...(transaction.campaignId
+                ? [
+                    {
+                      label: "Campaign",
+                      value: (
+                        <TextLink to={`/campaigns/${encodeURIComponent(transaction.campaignId)}`}>
+                          {transaction.campaignName
+                            ? `${transaction.campaignName} (${transaction.campaignId})`
+                            : transaction.campaignId}
+                        </TextLink>
+                      ),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+          <WebAppNote icon={note?.icon ?? <Info />} tone={note ? "warning" : "neutral"} className="mt-4">
+            {note?.text ?? "The current balance is the user's wallet balance now, after all their transactions."}
+          </WebAppNote>
         </WebAppCard>
       </div>
 
-      {transaction.payment && (
+      {(isFunding || transaction.paymentReference || card || transaction.bankName) && (
         <WebAppCard title="Payment Information">
           <div className="-my-3 grid gap-x-8 md:grid-cols-2">
             <WebAppDetailList
               align="right"
               items={[
-                { label: "Payment Reference", value: transaction.payment.reference },
-                { label: "Payment Method", value: paymentMethodLabels[transaction.payment.method] },
+                { label: "Payment Reference", value: transaction.paymentReference ?? "—" },
+                { label: "Payment Method", value: paymentMethodLabel(transaction.paymentMethod) },
               ]}
             />
-            <WebAppDetailList align="right" items={[{ label: "Payment Status", value: statusLabel }]} />
-          </div>
-          <p className="mt-6 text-xs text-gray-500">
-            Wallet funding is a direct payment. Campaign deductions and audience rentals are wallet debits and do
-            not use an external payment provider.
-          </p>
-        </WebAppCard>
-      )}
-
-      {transaction.type === "referral_bonus" && (
-        <WebAppCard title="Referral Information">
-          <div className="-my-3 grid gap-x-8 md:grid-cols-2">
             <WebAppDetailList
               align="right"
               items={[
-                {
-                  label: "Referral ID",
-                  value: transaction.referralId ? (
-                    <TextLink to={`/referrals/${transaction.referralId}`}>{transaction.referralId}</TextLink>
-                  ) : (
-                    "—"
-                  ),
-                },
-                { label: "Referral Rule", value: triggerLabels[referralTrigger] },
+                ...(card ? [{ label: "Card", value: card }] : []),
+                ...(transaction.bankName ? [{ label: "Bank", value: transaction.bankName }] : []),
+                { label: "Payment Status", value: walletStatusStyle(transaction.status).label },
               ]}
-            />
-            <WebAppDetailList
-              align="right"
-              items={[{ label: "Bonus Status", value: bonusStatusLabels[transaction.status] }]}
             />
           </div>
           <p className="mt-6 text-xs text-gray-500">
-            Referral bonuses are wallet credits issued through the referral programme. They are not platform
-            revenue and are not counted in revenue reporting.
+            Wallet funding is a direct payment. Campaign charges and audience rentals are wallet debits and do not use
+            an external payment provider.
           </p>
         </WebAppCard>
       )}

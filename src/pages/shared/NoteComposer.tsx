@@ -15,7 +15,8 @@ interface NoteComposerProps {
   /** `primary` for replies, `outline` for internal notes. */
   variant: "primary" | "outline";
   maxLength?: number;
-  onSubmit: (body: string) => void;
+  /** May return a promise: the button shows a spinner meanwhile, and the text is kept if it resolves to `false`. */
+  onSubmit: (body: string) => void | Promise<boolean>;
 }
 
 /** Textarea + character count + submit button, for replies and internal notes. Clears after submitting. */
@@ -31,6 +32,7 @@ export const NoteComposer = ({
   onSubmit,
 }: NoteComposerProps) => {
   const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
   const body = text.trim();
 
   return (
@@ -38,9 +40,18 @@ export const NoteComposer = ({
       noValidate
       onSubmit={(event) => {
         event.preventDefault();
-        if (!body) return;
-        onSubmit(body);
-        setText("");
+        if (!body || sending) return;
+        const result = onSubmit(body);
+        if (!result) {
+          setText("");
+          return;
+        }
+        setSending(true);
+        void result
+          .then((sent) => {
+            if (sent) setText("");
+          })
+          .finally(() => setSending(false));
       }}
     >
       <WebAppTextarea
@@ -58,7 +69,7 @@ export const NoteComposer = ({
           {text.length}/{maxLength}
           {hint && ` · ${hint}`}
         </p>
-        <WebAppButton type="submit" variant={variant} disabled={!body} leftIcon={<Icon className="h-4 w-4" />}>
+        <WebAppButton type="submit" variant={variant} disabled={!body} loading={sending} leftIcon={<Icon className="h-4 w-4" />}>
           {submitLabel}
         </WebAppButton>
       </div>

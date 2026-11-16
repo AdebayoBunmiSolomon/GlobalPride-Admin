@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 
 import { WebAppAvatar } from "@/components/Avatar";
-import { mockAdmin } from "@/data/mock";
+import { useCurrentAdmin } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings";
 import { cn } from "@/utils/cn";
 
@@ -43,6 +43,7 @@ interface SidebarProps {
 }
 
 export const Sidebar = ({ open, onClose }: SidebarProps) => {
+  const admin = useCurrentAdmin();
   const { platformName, logo } = useSettings((state) => state.general);
 
   return (
@@ -104,10 +105,10 @@ export const Sidebar = ({ open, onClose }: SidebarProps) => {
           onClick={onClose}
           className="flex items-center gap-3 border-t border-white/15 px-5 py-4 hover:bg-white/5"
         >
-          <WebAppAvatar name={mockAdmin.name} />
+          <WebAppAvatar name={admin.name} />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium">{mockAdmin.name}</span>
-            <span className="block truncate text-xs text-white/70">{mockAdmin.role}</span>
+            <span className="block truncate text-sm font-medium">{admin.name}</span>
+            <span className="block truncate text-xs text-white/70">{admin.role}</span>
           </span>
           <EllipsisVertical className="h-4 w-4 text-white/70" />
         </Link>

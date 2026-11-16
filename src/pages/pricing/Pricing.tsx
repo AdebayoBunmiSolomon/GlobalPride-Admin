@@ -1,23 +1,23 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, Tag } from "lucide-react";
+import { ArrowRight, CircleAlert, RefreshCw, Tag } from "lucide-react";
 
+import type { CampaignPrice } from "@/api/types/response";
 import { WebAppCard } from "@/components/Card";
 import { WebAppDetailList } from "@/components/DetailList";
+import { WebAppEmptyState } from "@/components/EmptyState";
 import { WebAppPageHeader } from "@/components/PageHeader";
-import { usePricing } from "@/hooks/usePricing";
-import type { ServicePrice } from "@/types/pricing";
+import { usePricingSettings } from "@/store/pricingStore";
+import { usePromotions } from "@/store/promotionsStore";
+import { cn } from "@/utils/cn";
 import { formatPrice } from "@/utils/format";
 import { StatusBadge } from "./PricingBadges";
 import { EditReferralBonusModal, EditServicePriceModal, EditVatModal } from "./PricingModals";
-import {
-  referralStatusStyles,
-  rewardTypeLabels,
-  servicePriceStatusStyles,
-  triggerLabels,
-} from "./pricingOptions";
+import { rewardTypeLabel, servicePriceStatusStyles, triggerLabel } from "./pricingOptions";
 
-type OpenModal = { kind: "service"; service: ServicePrice } | { kind: "vat" } | { kind: "referral" } | null;
+type OpenModal = { kind: "service"; service: CampaignPrice } | { kind: "vat" } | { kind: "referral" } | null;
+
+const breadcrumbs = [{ label: "Dashboard", to: "/dashboard" }, { label: "Pricing Management" }];
 
 const EditButton = ({ onClick, label }: { onClick: () => void; label: string }) => (
   <button
@@ -31,19 +31,64 @@ const EditButton = ({ onClick, label }: { onClick: () => void; label: string }) 
 );
 
 export const Pricing = () => {
-  const { services, vatRate, referralBonus, promotions } = usePricing();
+  const { data: promotions } = usePromotions();
+  const { data: pricing, error, loading, refresh } = usePricingSettings();
   const [modal, setModal] = useState<OpenModal>(null);
   const closeModal = () => setModal(null);
 
-  const activePromotions = promotions.filter((promotion) => promotion.status === "active").length;
+  const activePromotions = promotions?.filter((promotion) => promotion.status === "active").length;
+
+  const header = (
+    <WebAppPageHeader
+      title="Pricing Management"
+      description="Manage platform pricing, VAT and referral rewards."
+      breadcrumbs={breadcrumbs}
+      actions={
+        <button
+          type="button"
+          onClick={refresh}
+          disabled={loading}
+          aria-label="Refresh pricing"
+          title="Refresh"
+          className="rounded-lg border border-gray-200 bg-white p-2 text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+        </button>
+      }
+    />
+  );
+
+  if (!pricing) {
+    return (
+      <div className="space-y-6">
+        {header}
+        {error ? (
+          <WebAppCard>
+            <WebAppEmptyState
+              icon={<CircleAlert className="h-6 w-6" />}
+              title="Couldn't load pricing"
+              description={error.message}
+              primaryAction={{ label: "Try again", onClick: refresh }}
+            />
+          </WebAppCard>
+        ) : (
+          <div className="space-y-6" aria-busy={loading} aria-label="Loading pricing">
+            <div className="h-80 animate-pulse rounded-xl bg-gray-100" />
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="h-40 animate-pulse rounded-xl bg-gray-100" />
+              <div className="h-40 animate-pulse rounded-xl bg-gray-100" />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const { campaignPricing, vat, referralBonus } = pricing;
 
   return (
     <div className="space-y-6">
-      <WebAppPageHeader
-        title="Pricing Management"
-        description="Manage platform pricing, VAT and referral rewards."
-        breadcrumbs={[{ label: "Dashboard", to: "/dashboard" }, { label: "Pricing Management" }]}
-      />
+      {header}
 
       <WebAppCard
         divided
@@ -63,16 +108,16 @@ export const Pricing = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {services.map((service) => {
+              {campaignPricing.map((service) => {
                 const editable = service.status === "active";
 
                 return (
-                  <tr key={service.id} className="hover:bg-gray-50/60">
+                  <tr key={service.key} className="hover:bg-gray-50/60">
                     <td className="px-5 py-3.5 font-medium text-gray-900">{service.name}</td>
                     <td className="px-5 py-3.5 text-gray-700">
                       {service.price === null ? "—" : formatPrice(service.price)}
                     </td>
-                    <td className="px-5 py-3.5 text-gray-700">{service.unit}</td>
+                    <td className="px-5 py-3.5 text-gray-700 first-letter:uppercase">{service.unit || "—"}</td>
                     <td className="px-5 py-3.5">
                       <StatusBadge style={servicePriceStatusStyles[service.status]} />
                     </td>
@@ -102,7 +147,7 @@ export const Pricing = () => {
         >
           <div className="flex items-center justify-between rounded-lg bg-stone-50 px-4 py-4">
             <span className="text-sm text-gray-600">Current VAT Rate</span>
-            <span className="text-xl font-semibold text-gray-900">{vatRate}%</span>
+            <span className="text-xl font-semibold text-gray-900">{vat.ratePercent}%</span>
           </div>
         </WebAppCard>
 
@@ -115,9 +160,8 @@ export const Pricing = () => {
             align="right"
             items={[
               { label: "Bonus Amount", value: formatPrice(referralBonus.amount) },
-              { label: "Reward Type", value: rewardTypeLabels[referralBonus.rewardType] },
-              { label: "Trigger", value: triggerLabels[referralBonus.trigger] },
-              { label: "Status", value: <StatusBadge style={referralStatusStyles[referralBonus.status]} /> },
+              { label: "Reward Type", value: rewardTypeLabel(referralBonus.rewardType) },
+              { label: "Trigger", value: triggerLabel(referralBonus.trigger) },
             ]}
           />
         </WebAppCard>
@@ -142,14 +186,16 @@ export const Pricing = () => {
           </span>
           <div>
             <p className="text-sm text-gray-600">Active Promotions</p>
-            <p className="text-lg font-semibold text-gray-900">{activePromotions}</p>
+            <p className="text-lg font-semibold text-gray-900">{activePromotions ?? "…"}</p>
           </div>
         </div>
       </WebAppCard>
 
       {modal?.kind === "service" && <EditServicePriceModal service={modal.service} onClose={closeModal} />}
-      {modal?.kind === "vat" && <EditVatModal onClose={closeModal} />}
-      {modal?.kind === "referral" && <EditReferralBonusModal onClose={closeModal} />}
+      {modal?.kind === "vat" && <EditVatModal currentRate={vat.ratePercent} onClose={closeModal} />}
+      {modal?.kind === "referral" && (
+        <EditReferralBonusModal currentAmount={referralBonus.amount} onClose={closeModal} />
+      )}
     </div>
   );
 };

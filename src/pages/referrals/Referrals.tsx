@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { ArrowUpRight, CalendarDays, CircleCheck, Clock, Gift, Search, UserPlus, UserStar } from "lucide-react";
+import { ArrowUpRight, CircleAlert, CircleCheck, Clock, Gift, RefreshCw, Search, UserPlus, UserStar } from "lucide-react";
 
 import { WebAppCard } from "@/components/Card";
 import { WebAppEmptyState } from "@/components/EmptyState";
@@ -9,57 +9,73 @@ import { WebAppPageHeader } from "@/components/PageHeader";
 import { WebAppPagination } from "@/components/Pagination";
 import { WebAppSelectInput } from "@/components/Select";
 import { WebAppStatCard } from "@/components/StatCard";
-import { mockReferrals, referralProgramStats } from "@/data/mock";
-import { usePricing } from "@/hooks/usePricing";
+import { useListParams } from "@/hooks/useListParams";
+import { referralSummaryQuery, useReferralSummary, useReferrals } from "@/store/referralsStore";
+import { cn } from "@/utils/cn";
 import { dateRangeOptions, getDateFrom } from "@/utils/dateRange";
-import { formatDateOnly, formatNaira } from "@/utils/format";
+import { formatDateTimeShort, formatNaira, parseApiDate } from "@/utils/format";
 import { BonusStatusBadge, ReferralStatusBadge } from "./ReferralBadges";
-import { bonusStatusOptions, getReferralBonus, referralStatusOptions } from "./referralOptions";
+import { bonusAmountOf, bonusStatusOptions, referralStatusOptions, referredLabel } from "./referralOptions";
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 20;
 
 const linkClass = "font-medium text-primary hover:underline";
 
 export const Referrals = () => {
-  const configuredBonus = usePricing((state) => state.referralBonus.amount);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("all");
-  const [bonusStatus, setBonusStatus] = useState("all");
-  const [dateRange, setDateRange] = useState("all");
-  const [page, setPage] = useState(1);
+  // Filters live in the URL so "Back to Referral Management" returns to the same view.
+  const { get, update, page: requestedPage } = useListParams({
+    status: "all",
+    bonus: "all",
+    range: "all",
+    page: "1",
+  });
+  const search = get("q");
+  const status = referralStatusOptions.find((option) => option.value === get("status"))?.value ?? "all";
+  const bonusStatus = bonusStatusOptions.find((option) => option.value === get("bonus"))?.value ?? "all";
+  const range = dateRangeOptions.find((option) => option.value === get("range"))?.value ?? "all";
 
-  const referrals = useMemo(
-    () => mockReferrals.map((referral) => ({ ...referral, bonus: getReferralBonus(referral, configuredBonus) })),
-    [configuredBonus],
-  );
+  const { data: summary, error: summaryError } = useReferralSummary();
+  // Every referral is fetched once and cached (see src/store); filtering runs in the browser.
+  const { data: referrals, error, loading, refresh } = useReferrals();
+  const configuredBonus = summary?.currentBonusAmount ?? null;
 
-  // TODO: move search / filters / paging to the API once the referrals endpoint exists.
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const from = getDateFrom(dateRange);
+    const from = getDateFrom(range);
 
-    return referrals
-      .filter(
-        (referral) =>
-          (status === "all" || referral.status === status) &&
-          (bonusStatus === "all" || referral.bonus.status === bonusStatus) &&
-          new Date(`${referral.createdAt}T00:00:00`).getTime() >= from &&
-          (!query ||
-            [referral.id, referral.code, referral.referrerName, referral.referredUserName].some((value) =>
-              value.toLowerCase().includes(query),
-            )),
-      )
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
-  }, [referrals, search, status, bonusStatus, dateRange]);
+    return (referrals ?? []).filter(
+      (referral) =>
+        (status === "all" || referral.status === status) &&
+        (bonusStatus === "all" || referral.bonusStatus === bonusStatus) &&
+        (from === 0 || (referral.createdAt !== null && parseApiDate(referral.createdAt).getTime() >= from)) &&
+        (!query ||
+          [
+            referral.id,
+            referral.code,
+            referral.referrerName,
+            referral.referredUserName,
+            referral.inviteeContact,
+          ].some((field) => field?.toLowerCase().includes(query))),
+    );
+  }, [referrals, search, status, bonusStatus, range]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount);
-  const pageReferrals = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const page = Math.min(requestedPage, pageCount);
+  const pageReferrals = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  const withPageReset = (setter: (value: string) => void) => (value: string) => {
-    setter(value);
-    setPage(1);
+  const refreshAll = () => {
+    void referralSummaryQuery.fetch([], { force: true });
+    void refresh();
   };
+
+  const total = referrals?.length ?? 0;
+  const description = !referrals
+    ? "Loading referrals…"
+    : filtered.length === total
+      ? `${total.toLocaleString()} referrals`
+      : `${filtered.length.toLocaleString()} of ${total.toLocaleString()} referrals`;
+
+  const count = (value: number | undefined) => (value === undefined ? "…" : value.toLocaleString());
 
   return (
     <div className="space-y-6">
@@ -67,40 +83,59 @@ export const Referrals = () => {
         title="Referral Management"
         description="Monitor referral activity, qualification and reward payments."
         breadcrumbs={[{ label: "Dashboard", to: "/dashboard" }, { label: "Referral Management" }]}
+        actions={
+          <button
+            type="button"
+            onClick={refreshAll}
+            disabled={loading}
+            aria-label="Refresh referrals"
+            title="Refresh"
+            className="rounded-lg border border-gray-200 bg-white p-2.5 text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+          </button>
+        }
       />
+
+      {summaryError && !summary && (
+        <p role="alert" className="flex items-center gap-2 text-sm text-red-600">
+          <CircleAlert className="h-4 w-4" />
+          Couldn't load the referral summary: {summaryError.message}
+        </p>
+      )}
 
       <div>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <WebAppStatCard
             label="Total Referrals"
-            value={referralProgramStats.total.toLocaleString()}
+            value={count(summary?.totalReferrals)}
             note="Referral records created since platform launch."
             icon={UserStar}
           />
           <WebAppStatCard
             label="Successful Referrals"
-            value={referralProgramStats.successful.toLocaleString()}
+            value={count(summary?.successfulReferrals)}
             note="Referrals that met the configured qualification requirements."
             icon={CircleCheck}
           />
           <WebAppStatCard
             label="Pending Referrals"
-            value={referralProgramStats.pending.toLocaleString()}
+            value={count(summary?.pendingReferrals)}
             note="Referrals still awaiting qualification."
             icon={Clock}
           />
           <WebAppStatCard
             label="Referral Bonuses Paid"
-            value={formatNaira(referralProgramStats.bonusesPaid)}
+            value={summary ? formatNaira(summary.totalBonusPaid) : "…"}
             note="Referral credits successfully posted to wallets since launch."
             icon={Gift}
           />
         </div>
-        <div className="mt-3 flex justify-end">
-          <Link
-            to="/pricing"
-            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-          >
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs">
+          {summary && (
+            <span className="text-gray-600">Current bonus: {formatNaira(summary.currentBonusAmount)} per referral</span>
+          )}
+          <Link to="/pricing" className="inline-flex items-center gap-1 font-medium text-primary hover:underline">
             Bonus amounts & rules
             <ArrowUpRight className="h-3.5 w-3.5" />
           </Link>
@@ -108,67 +143,80 @@ export const Referrals = () => {
       </div>
 
       <WebAppCard
+        divided
         title="Referral Records"
-        description="View referred users, qualification status and reward progress."
+        description={description}
         bodyClassName="p-0"
-      >
-        <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 px-5 pt-4 pb-5">
-          <WebAppInput
-            id="referralSearch"
-            type="search"
-            placeholder="Search referral ID, name or code"
-            aria-label="Search referral ID, name or code"
-            leftIcon={<Search className="h-4 w-4" />}
-            value={search}
-            onChange={(event) => {
-              setSearch(event.target.value);
-              setPage(1);
-            }}
-            fullWidth={false}
-            containerClassName="w-full sm:w-64"
-          />
-          <WebAppSelectInput
-            id="referralStatus"
-            options={referralStatusOptions}
-            value={status}
-            onChange={withPageReset(setStatus)}
-            fullWidth={false}
-            containerClassName="w-full sm:w-40"
-          />
-          <WebAppSelectInput
-            id="bonusStatus"
-            options={bonusStatusOptions}
-            value={bonusStatus}
-            onChange={withPageReset(setBonusStatus)}
-            fullWidth={false}
-            containerClassName="w-full sm:w-48"
-          />
-          <div className="flex w-full items-center gap-2 sm:w-auto">
-            <span className="shrink-0 text-xs font-medium text-gray-600">Referral Date</span>
+        action={
+          <div className="flex w-full flex-wrap gap-3 xl:w-auto">
+            <WebAppInput
+              id="referralSearch"
+              type="search"
+              placeholder="Search name, code or contact"
+              aria-label="Search by referrer, referred user, referral code or invited contact"
+              leftIcon={<Search className="h-4 w-4" />}
+              value={search}
+              onChange={(event) => update({ q: event.target.value, page: null })}
+              fullWidth={false}
+              containerClassName="w-full sm:w-64"
+            />
+            <WebAppSelectInput
+              id="referralStatus"
+              aria-label="Referral status"
+              options={referralStatusOptions}
+              value={status}
+              onChange={(value) => update({ status: value, page: null })}
+              fullWidth={false}
+              containerClassName="w-full sm:w-40"
+            />
+            <WebAppSelectInput
+              id="bonusStatus"
+              aria-label="Bonus status"
+              options={bonusStatusOptions}
+              value={bonusStatus}
+              onChange={(value) => update({ bonus: value, page: null })}
+              fullWidth={false}
+              containerClassName="w-full sm:w-48"
+            />
             <WebAppSelectInput
               id="referralDate"
+              aria-label="Referral date"
               options={dateRangeOptions}
-              value={dateRange}
-              onChange={withPageReset(setDateRange)}
-              leftIcon={<CalendarDays className="h-4 w-4" />}
+              value={range}
+              onChange={(value) => update({ range: value, page: null })}
               fullWidth={false}
-              containerClassName="w-full sm:w-44"
+              containerClassName="w-full sm:w-40"
             />
           </div>
-        </div>
-
-        {pageReferrals.length === 0 ? (
+        }
+      >
+        {!referrals ? (
+          error ? (
+            <WebAppEmptyState
+              icon={<CircleAlert className="h-6 w-6" />}
+              title="Couldn't load referrals"
+              description={error.message}
+              primaryAction={{ label: "Try again", onClick: refresh }}
+            />
+          ) : (
+            <div className="space-y-2 p-5" aria-busy="true" aria-label="Loading referrals">
+              {Array.from({ length: 8 }, (_, i) => (
+                <div key={i} className="h-9 animate-pulse rounded-md bg-gray-100" />
+              ))}
+            </div>
+          )
+        ) : pageReferrals.length === 0 ? (
           <WebAppEmptyState
             icon={<UserPlus className="h-6 w-6" />}
             title="No referrals found"
-            description="Try a different search term, filter or date range."
+            description={total === 0 ? "No referrals yet." : "Try a different search term, filter or date range."}
           />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-240 text-left text-sm">
               <thead className="border-b border-gray-200 text-xs text-gray-600">
                 <tr>
-                  <th scope="col" className="px-5 py-3 font-semibold">Referral ID</th>
+                  <th scope="col" className="px-5 py-3 font-semibold">Referral Code</th>
                   <th scope="col" className="px-5 py-3 font-semibold">Referrer</th>
                   <th scope="col" className="px-5 py-3 font-semibold">Referred User</th>
                   <th scope="col" className="px-5 py-3 font-semibold">Referral Date</th>
@@ -179,34 +227,49 @@ export const Referrals = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {pageReferrals.map((referral) => (
-                  <tr key={referral.id} className="hover:bg-gray-50/60">
-                    <td className="px-5 py-3.5 font-medium text-gray-900">{referral.id}</td>
-                    <td className="px-5 py-3.5">
-                      <Link to={`/users/${referral.referrerId}`} className={linkClass}>
-                        {referral.referrerName}
-                      </Link>
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <Link to={`/users/${referral.referredUserId}`} className={linkClass}>
-                        {referral.referredUserName}
-                      </Link>
-                    </td>
-                    <td className="px-5 py-3.5 text-gray-700">{formatDateOnly(referral.createdAt)}</td>
-                    <td className="px-5 py-3.5">
-                      <ReferralStatusBadge status={referral.status} />
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <BonusStatusBadge status={referral.bonus.status} />
-                    </td>
-                    <td className="px-5 py-3.5 font-medium text-gray-900">{formatNaira(referral.bonus.amount)}</td>
-                    <td className="px-5 py-3.5">
-                      <Link to={`/referrals/${referral.id}`} className={linkClass}>
-                        View
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
+                {pageReferrals.map((referral) => {
+                  const bonusAmount = bonusAmountOf(referral, configuredBonus);
+                  return (
+                    <tr key={referral.id} className="hover:bg-gray-50/60">
+                      <td className="px-5 py-3.5 font-medium text-gray-900">{referral.code ?? "—"}</td>
+                      <td className="px-5 py-3.5">
+                        {referral.referrerId ? (
+                          <Link to={`/users/${referral.referrerId}`} className={linkClass}>
+                            {referral.referrerName ?? "View user"}
+                          </Link>
+                        ) : (
+                          <span className="text-gray-700">{referral.referrerName ?? "—"}</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3.5">
+                        {referral.referredUserId ? (
+                          <Link to={`/users/${referral.referredUserId}`} className={linkClass}>
+                            {referredLabel(referral)}
+                          </Link>
+                        ) : (
+                          <span className="text-gray-700">{referredLabel(referral)}</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3.5 whitespace-nowrap text-gray-700">
+                        {referral.createdAt ? formatDateTimeShort(parseApiDate(referral.createdAt)) : "—"}
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <ReferralStatusBadge status={referral.status} />
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <BonusStatusBadge status={referral.bonusStatus} />
+                      </td>
+                      <td className="px-5 py-3.5 font-medium text-gray-900">
+                        {bonusAmount === null ? "—" : formatNaira(bonusAmount)}
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <Link to={`/referrals/${encodeURIComponent(referral.id)}`} className={linkClass}>
+                          View
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -215,10 +278,10 @@ export const Referrals = () => {
         {filtered.length > 0 && (
           <WebAppPagination
             className="border-t border-gray-200 px-5 py-4"
-            page={currentPage}
+            page={page}
             pageSize={PAGE_SIZE}
             total={filtered.length}
-            onPageChange={setPage}
+            onPageChange={(next) => update({ page: next })}
             itemLabel="referrals"
           />
         )}

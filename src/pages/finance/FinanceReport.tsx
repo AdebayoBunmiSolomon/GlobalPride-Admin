@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Download, FileChartColumn, ReceiptText } from "lucide-react";
+import { CircleAlert, Download, FileChartColumn, ReceiptText } from "lucide-react";
 
 import { WebAppButton } from "@/components/Button";
 import { WebAppCard } from "@/components/Card";
@@ -8,50 +8,34 @@ import { WebAppEmptyState } from "@/components/EmptyState";
 import { WebAppPageHeader } from "@/components/PageHeader";
 import { WebAppPagination } from "@/components/Pagination";
 import { WebAppStatCard } from "@/components/StatCard";
+import { RefreshButton } from "@/pages/shared/RefreshButton";
+import { financeReportQuery, financeSummaryQuery, useFinanceReport, useFinanceSummary } from "@/store/financeStore";
 import { cn } from "@/utils/cn";
+import { exportReportCsv } from "./exportReport";
 import { BreakdownTable, PeriodSelect } from "./FinanceParts";
 import { useReportPeriod } from "./useReportPeriod";
-import { exportReportCsv, getFinanceReport, getReportRows } from "./reports";
+import { financeReports, getFinanceReport, type FinanceReport as FinanceReportDefinition } from "./reports";
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 20;
 
-export const FinanceReport = () => {
-  const { reportId } = useParams();
-  const navigate = useNavigate();
-  const { period, setPeriod, withPeriod } = useReportPeriod();
-  const [page, setPage] = useState(1);
-  const report = getFinanceReport(reportId);
+const ReportBody = ({ report }: { report: FinanceReportDefinition }) => {
+  const { period, range, page, setPeriod, setPage, withPeriod } = useReportPeriod();
+  const summary = useFinanceSummary(range);
+  const rows = useFinanceReport(report.api, range, page, PAGE_SIZE);
+  const [exporting, setExporting] = useState(false);
+  const breakdown = summary.data && report.breakdown ? report.breakdown(summary.data) : null;
+  const summaryItems = summary.data ? report.summary(summary.data) : [];
 
-  // TODO: page and filter on the API once the finance report endpoints exist.
-  const rows = useMemo(() => (report ? getReportRows(report, period) : []), [report, period]);
+  const refreshAll = () => {
+    void financeSummaryQuery.fetch([range], { force: true });
+    void financeReportQuery.fetch([report.api, range, page, PAGE_SIZE], { force: true });
+  };
 
-  const backLink = { label: "Back to Finance & Reports", to: withPeriod("/finance") };
-  const breadcrumbs = [
-    { label: "Dashboard", to: "/dashboard" },
-    { label: "Finance & Reports", to: withPeriod("/finance") },
-    { label: report?.title ?? "Report" },
-  ];
-
-  if (!report) {
-    return (
-      <div>
-        <WebAppPageHeader breadcrumbs={breadcrumbs} backLink={backLink} />
-        <WebAppCard>
-          <WebAppEmptyState
-            icon={<FileChartColumn className="h-6 w-6" />}
-            title="Report not found"
-            description="This report doesn't exist, or the link is incorrect."
-            primaryAction={{ label: "Back to Finance & Reports", onClick: () => navigate(backLink.to) }}
-          />
-        </WebAppCard>
-      </div>
-    );
-  }
-
-  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount);
-  const pageRows = rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-  const { breakdown } = report;
+  const exportCsv = async () => {
+    setExporting(true);
+    await exportReportCsv(report, range);
+    setExporting(false);
+  };
 
   return (
     <div className="space-y-6">
@@ -59,22 +43,22 @@ export const FinanceReport = () => {
         title={report.title}
         description={report.description}
         icon={<report.icon />}
-        breadcrumbs={breadcrumbs}
-        backLink={backLink}
+        breadcrumbs={[
+          { label: "Dashboard", to: "/dashboard" },
+          { label: "Finance & Reports", to: withPeriod("/finance") },
+          { label: report.title },
+        ]}
+        backLink={{ label: "Back to Finance & Reports", to: withPeriod("/finance") }}
         actions={
           <div className="flex flex-wrap items-center gap-3">
-            <PeriodSelect
-              value={period}
-              onChange={(value) => {
-                setPeriod(value);
-                setPage(1);
-              }}
-            />
+            <PeriodSelect value={period} onChange={setPeriod} />
+            <RefreshButton label="Refresh report" loading={rows.loading || summary.loading} onClick={refreshAll} />
             <WebAppButton
               size="sm"
               className="h-9 text-sm"
+              loading={exporting}
               leftIcon={<Download className="h-4 w-4" />}
-              onClick={() => exportReportCsv(report, period)}
+              onClick={() => void exportCsv()}
             >
               Export CSV
             </WebAppButton>
@@ -84,16 +68,29 @@ export const FinanceReport = () => {
 
       <section>
         <h2 className="mb-3 text-sm font-semibold text-gray-900">{report.summaryTitle}</h2>
-        <div
-          className={cn(
-            "grid gap-4 sm:grid-cols-2",
-            report.summary.length === 3 ? "lg:grid-cols-3" : "xl:grid-cols-4",
-          )}
-        >
-          {report.summary.map((item) => (
-            <WebAppStatCard key={item.label} {...item} />
-          ))}
-        </div>
+        {summary.error && !summary.data ? (
+          <p role="alert" className="flex items-center gap-2 text-sm text-red-600">
+            <CircleAlert className="h-4 w-4" />
+            Couldn't load the summary: {summary.error.message}
+          </p>
+        ) : !summary.data ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-busy="true" aria-label="Loading summary">
+            {Array.from({ length: 4 }, (_, index) => (
+              <div key={index} className="h-28 animate-pulse rounded-xl bg-gray-100" />
+            ))}
+          </div>
+        ) : (
+          <div
+            className={cn(
+              "grid gap-4 sm:grid-cols-2",
+              summaryItems.length === 3 ? "lg:grid-cols-3" : summaryItems.length === 2 ? "" : "xl:grid-cols-4",
+            )}
+          >
+            {summaryItems.map((item) => (
+              <WebAppStatCard key={item.label} {...item} />
+            ))}
+          </div>
+        )}
       </section>
 
       {breakdown && (
@@ -102,15 +99,44 @@ export const FinanceReport = () => {
         </WebAppCard>
       )}
 
-      <WebAppCard divided title={report.activityTitle} description={report.activityDescription} bodyClassName="p-0">
-        {pageRows.length === 0 ? (
+      <WebAppCard
+        divided
+        title={report.activityTitle}
+        description={
+          rows.data ? `${report.activityDescription} ${rows.data.totalCount.toLocaleString()} records, newest first.` : report.activityDescription
+        }
+        bodyClassName="p-0"
+      >
+        {rows.error && rows.data && (
+          <p role="alert" className="flex items-center gap-2 border-b border-gray-200 px-5 py-3 text-sm text-red-600">
+            <CircleAlert className="h-4 w-4" />
+            Couldn't refresh: {rows.error.message}
+          </p>
+        )}
+
+        {!rows.data ? (
+          rows.error ? (
+            <WebAppEmptyState
+              icon={<CircleAlert className="h-6 w-6" />}
+              title="Couldn't load this report"
+              description={rows.error.message}
+              primaryAction={{ label: "Try again", onClick: () => void rows.refresh() }}
+            />
+          ) : (
+            <div className="space-y-3 p-5" aria-busy="true" aria-label="Loading report">
+              {Array.from({ length: 6 }, (_, index) => (
+                <div key={index} className="h-9 animate-pulse rounded-lg bg-gray-100" />
+              ))}
+            </div>
+          )
+        ) : rows.data.items.length === 0 ? (
           <WebAppEmptyState
             icon={<ReceiptText className="h-6 w-6" />}
             title={`No ${report.itemLabel}`}
             description="Nothing was recorded in this period. Try a longer date range."
           />
         ) : (
-          <div className="overflow-x-auto">
+          <div className={cn("overflow-x-auto transition-opacity", rows.loading && "opacity-60")}>
             <table className="w-full min-w-220 text-left text-sm">
               <thead className="border-b border-gray-200 text-xs text-gray-600">
                 <tr>
@@ -123,19 +149,19 @@ export const FinanceReport = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {pageRows.map((transaction) => (
-                  <tr key={transaction.id} className="hover:bg-gray-50/60">
+                {rows.data.items.map((row) => (
+                  <tr key={row.id} className="hover:bg-gray-50/60">
                     {report.columns.map((column, index) => (
                       <td
                         key={column.header}
                         className={cn("px-5 py-3.5", index === 0 ? "font-medium text-gray-900" : "text-gray-700")}
                       >
-                        {column.cell(transaction)}
+                        {column.cell(row)}
                       </td>
                     ))}
                     <td className="px-5 py-3.5">
                       <Link
-                        to={`/wallets/transactions/${transaction.id}`}
+                        to={`/wallets/transactions/${encodeURIComponent(row.reference)}`}
                         className="font-medium text-primary hover:underline"
                       >
                         View
@@ -148,12 +174,12 @@ export const FinanceReport = () => {
           </div>
         )}
 
-        {rows.length > 0 && (
+        {rows.data && rows.data.totalCount > 0 && (
           <WebAppPagination
             className="border-t border-gray-200 px-5 py-4"
-            page={currentPage}
+            page={page}
             pageSize={PAGE_SIZE}
-            total={rows.length}
+            total={rows.data.totalCount}
             onPageChange={setPage}
             itemLabel={report.itemLabel}
           />
@@ -163,4 +189,38 @@ export const FinanceReport = () => {
       </WebAppCard>
     </div>
   );
+};
+
+export const FinanceReport = () => {
+  const { reportId } = useParams();
+  const navigate = useNavigate();
+  const { withPeriod } = useReportPeriod();
+  const report = getFinanceReport(reportId);
+
+  if (!report) {
+    const backLink = { label: "Back to Finance & Reports", to: withPeriod("/finance") };
+    return (
+      <div>
+        <WebAppPageHeader
+          breadcrumbs={[
+            { label: "Dashboard", to: "/dashboard" },
+            { label: "Finance & Reports", to: backLink.to },
+            { label: "Report" },
+          ]}
+          backLink={backLink}
+        />
+        <WebAppCard>
+          <WebAppEmptyState
+            icon={<FileChartColumn className="h-6 w-6" />}
+            title="Report not found"
+            description={`Available reports: ${financeReports.map((item) => item.title).join(", ")}.`}
+            primaryAction={{ label: "Back to Finance & Reports", onClick: () => navigate(backLink.to) }}
+          />
+        </WebAppCard>
+      </div>
+    );
+  }
+
+  // Keyed so switching reports starts on page 1 with fresh state.
+  return <ReportBody key={report.id} report={report} />;
 };

@@ -1,44 +1,45 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { MapPinOff, Search } from "lucide-react";
+import { CircleAlert, MapPinOff, Search } from "lucide-react";
 
+import type { AudienceLgaRow, ApiError } from "@/api/types/response";
 import { WebAppCard } from "@/components/Card";
 import { WebAppEmptyState } from "@/components/EmptyState";
 import { WebAppInput } from "@/components/Input";
 import { WebAppPageHeader } from "@/components/PageHeader";
 import { WebAppPagination } from "@/components/Pagination";
 import { WebAppSelectInput } from "@/components/Select";
-import { useAudience } from "@/hooks/useAudience";
-import type { AudienceState } from "@/types/audience";
-import {
-  LocationStatusBadge,
-  LocationStatusModal,
-  LocationStatusToggle,
-  type LocationStatusTarget,
-} from "./LocationStatus";
+import { useAllAudienceLgas, useAudienceLgas, useAudienceStates, useAudienceSummary } from "@/store/audienceStore";
+import { DeleteRecordsModal, type DeleteRecordsTarget } from "./DeleteRecordsModal";
+import { RefreshButton, TableSkeleton } from "./audienceShared";
 
 const PAGE_SIZE = 20;
 
+const statesCrumb = { label: "States", to: "/audience-marketplace/states" };
+const marketplaceCrumb = { label: "Audience Marketplace", to: "/audience-marketplace" };
+const dashboardCrumb = { label: "Dashboard", to: "/dashboard" };
+
 /**
- * Serves both `/audience-marketplace/lgas` (all LGAs) and
- * `/audience-marketplace/states/:stateId/lgas` (opened from a state's "View LGAs").
+ * Serves both `/audience-marketplace/lgas` (every LGA with contacts) and
+ * `/audience-marketplace/states/:stateId/lgas` (one state, by name, from "View LGAs").
  */
 export const AudienceLgas = () => {
   const { stateId } = useParams();
-  const navigate = useNavigate();
-  const states = useAudience((store) => store.states);
-  const parentState = stateId ? states.find((state) => state.id === stateId) : undefined;
+  return stateId ? <StateLgas key={stateId} state={stateId} /> : <AllLgas />;
+};
 
-  if (stateId && !parentState) {
+/** One state's LGAs. */
+const StateLgas = ({ state }: { state: string }) => {
+  const navigate = useNavigate();
+  const { data: states } = useAudienceStates();
+  const { data, error, loading, refresh } = useAudienceLgas(state);
+  const known = !states || states.some((item) => item.name.toLowerCase() === state.toLowerCase());
+
+  if (!known || error?.status === 404) {
     return (
       <div>
         <WebAppPageHeader
-          breadcrumbs={[
-            { label: "Dashboard", to: "/dashboard" },
-            { label: "Audience Marketplace", to: "/audience-marketplace" },
-            { label: "States", to: "/audience-marketplace/states" },
-            { label: "LGAs" },
-          ]}
+          breadcrumbs={[dashboardCrumb, marketplaceCrumb, statesCrumb, { label: "LGAs" }]}
           backLink={{ label: "Back to States", to: "/audience-marketplace/states" }}
         />
         <WebAppCard>
@@ -53,71 +54,89 @@ export const AudienceLgas = () => {
     );
   }
 
-  // Keyed so the state filter resets when moving between states.
-  return <LgaList key={stateId ?? "all"} parentState={parentState} />;
+  return (
+    <LgaList
+      title={`${state} LGAs`}
+      breadcrumbs={[dashboardCrumb, marketplaceCrumb, statesCrumb, { label: state }]}
+      backLink={{ label: "Back to States", to: "/audience-marketplace/states" }}
+      lgas={data}
+      error={error}
+      loading={loading}
+      refresh={refresh}
+    />
+  );
 };
 
-const LgaList = ({ parentState }: { parentState?: AudienceState }) => {
-  const { states, lgas, setLgaStatus } = useAudience();
-  const [search, setSearch] = useState("");
-  const [stateFilter, setStateFilter] = useState(parentState?.id ?? "all");
-  const [page, setPage] = useState(1);
-  const [target, setTarget] = useState<LocationStatusTarget | null>(null);
+/** Every LGA with contacts, across all states. */
+const AllLgas = () => {
+  const { data, error, loading, refresh } = useAllAudienceLgas();
+  return (
+    <LgaList
+      title="LGAs"
+      breadcrumbs={[dashboardCrumb, marketplaceCrumb, { label: "LGAs" }]}
+      backLink={{ label: "Back to Audience Marketplace", to: "/audience-marketplace" }}
+      lgas={data}
+      error={error}
+      loading={loading}
+      refresh={refresh}
+      stateFilter
+    />
+  );
+};
 
-  const stateNames = useMemo(() => new Map(states.map((state) => [state.id, state.name])), [states]);
+interface LgaListProps {
+  title: string;
+  breadcrumbs: { label: string; to?: string }[];
+  backLink: { label: string; to: string };
+  lgas: AudienceLgaRow[] | null;
+  error: ApiError | null;
+  loading: boolean;
+  refresh: () => void;
+  /** Show a state filter (the all-LGAs view). */
+  stateFilter?: boolean;
+}
+
+const LgaList = ({ title, breadcrumbs, backLink, lgas, error, loading, refresh, stateFilter }: LgaListProps) => {
+  // Sample data isn't stored, so there is nothing to delete until the first upload.
+  const isSampleData = useAudienceSummary().data?.isSampleData ?? true;
+  const [search, setSearch] = useState("");
+  const [state, setState] = useState("all");
+  const [page, setPage] = useState(1);
+  const [target, setTarget] = useState<DeleteRecordsTarget | null>(null);
+
   const stateOptions = useMemo(
-    () => [{ label: "All States", value: "all" }, ...states.map((state) => ({ label: state.name, value: state.id }))],
-    [states],
+    () => [
+      { label: "All States", value: "all" },
+      ...[...new Set((lgas ?? []).map((lga) => lga.state))].sort().map((name) => ({ label: name, value: name })),
+    ],
+    [lgas],
   );
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return lgas.filter(
-      (lga) =>
-        (stateFilter === "all" || lga.stateId === stateFilter) &&
-        (!query || lga.name.toLowerCase().includes(query)),
+    return (lgas ?? []).filter(
+      (lga) => (state === "all" || lga.state === state) && (!query || lga.name.toLowerCase().includes(query)),
     );
-  }, [lgas, search, stateFilter]);
+  }, [lgas, search, state]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const pageLgas = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-  // TODO: call the locations API once the activate / deactivate endpoint exists.
-  const handleConfirm = ({ id, status }: LocationStatusTarget) =>
-    setLgaStatus(id, status === "active" ? "inactive" : "active");
-
-  const breadcrumbs = parentState
-    ? [
-        { label: "Dashboard", to: "/dashboard" },
-        { label: "Audience Marketplace", to: "/audience-marketplace" },
-        { label: "States", to: "/audience-marketplace/states" },
-        { label: parentState.name, to: "/audience-marketplace/states" },
-        { label: "LGAs" },
-      ]
-    : [
-        { label: "Dashboard", to: "/dashboard" },
-        { label: "Audience Marketplace", to: "/audience-marketplace" },
-        { label: "LGAs" },
-      ];
-
   return (
     <div>
       <WebAppPageHeader
-        title="LGAs"
-        description="Manage Local Government Areas and their available audience records."
+        title={title}
+        description="Local Government Areas with contacts loaded."
         breadcrumbs={breadcrumbs}
-        backLink={
-          parentState
-            ? { label: "Back to States", to: "/audience-marketplace/states" }
-            : { label: "Back to Audience Marketplace", to: "/audience-marketplace" }
-        }
+        backLink={backLink}
+        actions={<RefreshButton onClick={refresh} loading={loading} label="Refresh LGAs" />}
       />
 
       <WebAppCard
         divided
         title="LGAs"
-        description={`${filtered.length.toLocaleString()} LGAs`}
+        description={lgas ? `${filtered.length.toLocaleString()} LGAs` : undefined}
         bodyClassName="p-0"
         action={
           <div className="flex w-full flex-wrap gap-3 sm:w-auto">
@@ -135,27 +154,41 @@ const LgaList = ({ parentState }: { parentState?: AudienceState }) => {
               fullWidth={false}
               containerClassName="w-full sm:w-56"
             />
-            <WebAppSelectInput
-              id="lgaState"
-              options={stateOptions}
-              value={stateFilter}
-              onChange={(value) => {
-                setStateFilter(value);
-                setPage(1);
-              }}
-              searchable
-              searchPlaceholder="Search states..."
-              fullWidth={false}
-              containerClassName="w-full sm:w-48"
-            />
+            {stateFilter && (
+              <WebAppSelectInput
+                id="lgaState"
+                aria-label="State"
+                options={stateOptions}
+                value={state}
+                onChange={(value) => {
+                  setState(value);
+                  setPage(1);
+                }}
+                searchable
+                searchPlaceholder="Search states..."
+                fullWidth={false}
+                containerClassName="w-full sm:w-48"
+              />
+            )}
           </div>
         }
       >
-        {pageLgas.length === 0 ? (
+        {!lgas ? (
+          error ? (
+            <WebAppEmptyState
+              icon={<CircleAlert className="h-6 w-6" />}
+              title="Couldn't load LGAs"
+              description={error.message}
+              primaryAction={{ label: "Try again", onClick: refresh }}
+            />
+          ) : (
+            <TableSkeleton label="Loading LGAs" rows={10} />
+          )
+        ) : pageLgas.length === 0 ? (
           <WebAppEmptyState
             icon={<MapPinOff className="h-6 w-6" />}
             title="No LGAs found"
-            description="Try a different search term or state."
+            description={lgas.length === 0 ? "No contacts have been loaded here yet." : "Try a different search term or state."}
           />
         ) : (
           <div className="overflow-x-auto">
@@ -165,28 +198,33 @@ const LgaList = ({ parentState }: { parentState?: AudienceState }) => {
                   <th scope="col" className="px-5 py-3 font-semibold">LGA</th>
                   <th scope="col" className="px-5 py-3 font-semibold">State</th>
                   <th scope="col" className="px-5 py-3 font-semibold">Total Records</th>
-                  <th scope="col" className="px-5 py-3 font-semibold">Available Records</th>
-                  <th scope="col" className="px-5 py-3 font-semibold">Status</th>
-                  <th scope="col" className="px-5 py-3 font-semibold">Action</th>
+                  <th scope="col" className="px-5 py-3 font-semibold">Male</th>
+                  <th scope="col" className="px-5 py-3 font-semibold">Female</th>
+                  {!isSampleData && <th scope="col" className="px-5 py-3 font-semibold">Action</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {pageLgas.map((lga) => (
-                  <tr key={lga.id} className="hover:bg-gray-50/60">
+                  <tr key={`${lga.state}|${lga.name}`} className="hover:bg-gray-50/60">
                     <td className="px-5 py-3.5 font-medium text-gray-900">{lga.name}</td>
-                    <td className="px-5 py-3.5 text-gray-700">{stateNames.get(lga.stateId)}</td>
+                    <td className="px-5 py-3.5 text-gray-700">{lga.state}</td>
                     <td className="px-5 py-3.5 text-gray-700">{lga.totalRecords.toLocaleString()}</td>
-                    <td className="px-5 py-3.5 text-gray-700">{lga.availableRecords.toLocaleString()}</td>
-                    <td className="px-5 py-3.5">
-                      <LocationStatusBadge status={lga.status} />
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <LocationStatusToggle
-                        name={lga.name}
-                        status={lga.status}
-                        onClick={() => setTarget({ id: lga.id, name: lga.name, status: lga.status })}
-                      />
-                    </td>
+                    <td className="px-5 py-3.5 text-gray-700">{lga.maleRecords.toLocaleString()}</td>
+                    <td className="px-5 py-3.5 text-gray-700">{lga.femaleRecords.toLocaleString()}</td>
+                    {!isSampleData && (
+                      <td className="px-5 py-3.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setTarget({ state: lga.state, lga: lga.name, totalRecords: lga.totalRecords })
+                          }
+                          aria-label={`Delete ${lga.name} records`}
+                          className="font-medium text-red-600 hover:underline"
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -206,7 +244,7 @@ const LgaList = ({ parentState }: { parentState?: AudienceState }) => {
         )}
       </WebAppCard>
 
-      <LocationStatusModal target={target} onConfirm={handleConfirm} onClose={() => setTarget(null)} />
+      <DeleteRecordsModal target={target} onClose={() => setTarget(null)} />
     </div>
   );
 };

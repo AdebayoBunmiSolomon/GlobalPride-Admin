@@ -1,19 +1,18 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowUpRight, CircleCheck, CircleX, Clock, Info, UserPlus } from "lucide-react";
+import { ArrowUpRight, CircleAlert, CircleCheck, CircleX, Clock, Info, UserPlus } from "lucide-react";
 
 import { WebAppCard } from "@/components/Card";
 import { WebAppDetailList } from "@/components/DetailList";
 import { WebAppEmptyState } from "@/components/EmptyState";
 import { WebAppNote } from "@/components/Note";
 import { WebAppPageHeader } from "@/components/PageHeader";
-import { mockReferrals } from "@/data/mock";
-import { usePricing } from "@/hooks/usePricing";
-import { useUsers } from "@/hooks/useUsers";
-import { triggerLabels } from "@/pages/pricing/pricingOptions";
-import { formatDate, formatDateOnly, formatNaira } from "@/utils/format";
+import { triggerLabel } from "@/pages/pricing/pricingOptions";
+import { useReferralBonusSettings } from "@/store/pricingStore";
+import { useReferral, useReferralSummary } from "@/store/referralsStore";
+import { formatLongDateTime, formatNaira, parseApiDate } from "@/utils/format";
 import { BonusStatusBadge, ReferralStatusBadge } from "./ReferralBadges";
-import { bonusStatusStyles, getReferralBonus, referralStatusStyles } from "./referralOptions";
+import { bonusAmountOf, bonusStatusStyles, referralStatusStyles } from "./referralOptions";
 
 const breadcrumbs = [
   { label: "Dashboard", to: "/dashboard" },
@@ -34,32 +33,50 @@ const SectionLabel = ({ children }: { children: ReactNode }) => (
   <p className="pt-1 text-xs font-semibold text-gray-600">{children}</p>
 );
 
+const when = (value: string | null) => (value ? formatLongDateTime(parseApiDate(value)) : "—");
+
 export const ReferralDetails = () => {
-  const { referralId } = useParams();
+  const { referralId = "" } = useParams();
   const navigate = useNavigate();
-  const referralBonus = usePricing((state) => state.referralBonus);
-  const users = useUsers((state) => state.users);
-  const referral = mockReferrals.find((item) => item.id === referralId);
+  const { data: referral, error, loading, refresh } = useReferral(referralId);
+  const { data: summary } = useReferralSummary();
+  // Only for the qualification rule (the trigger); the amount comes from the referral summary.
+  const referralBonus = useReferralBonusSettings();
 
   if (!referral) {
+    const notFound = error?.status === 404 || error?.status === 400;
     return (
       <div>
         <WebAppPageHeader breadcrumbs={breadcrumbs} backLink={backLink} />
-        <WebAppCard>
-          <WebAppEmptyState
-            icon={<UserPlus className="h-6 w-6" />}
-            title="Referral not found"
-            description="This referral doesn't exist, or the link is incorrect."
-            primaryAction={{ label: "Back to Referral Management", onClick: () => navigate("/referrals") }}
-          />
-        </WebAppCard>
+        {error ? (
+          <WebAppCard>
+            <WebAppEmptyState
+              icon={notFound ? <UserPlus className="h-6 w-6" /> : <CircleAlert className="h-6 w-6" />}
+              title={notFound ? "Referral not found" : "Couldn't load this referral"}
+              description={notFound ? "This referral doesn't exist, or the link is incorrect." : error.message}
+              primaryAction={
+                notFound
+                  ? { label: "Back to Referral Management", onClick: () => navigate("/referrals") }
+                  : { label: "Try again", onClick: refresh }
+              }
+            />
+          </WebAppCard>
+        ) : (
+          <div className="space-y-4" aria-busy={loading} aria-label="Loading referral">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="h-80 animate-pulse rounded-xl bg-gray-100" />
+              <div className="h-80 animate-pulse rounded-xl bg-gray-100" />
+            </div>
+            <div className="h-56 animate-pulse rounded-xl bg-gray-100" />
+          </div>
+        )}
       </div>
     );
   }
 
-  const bonus = getReferralBonus(referral, referralBonus.amount);
+  const configuredBonus = summary?.currentBonusAmount ?? null;
+  const bonusAmount = bonusAmountOf(referral, configuredBonus);
   const isQualified = referral.status === "successful";
-  const registeredAt = users.find((user) => user.id === referral.referredUserId)?.joinedAt ?? referral.createdAt;
 
   const rewardNote = {
     paid: { tone: "success", icon: <CircleCheck />, text: "This bonus was successfully credited to the referrer's wallet." },
@@ -76,7 +93,7 @@ export const ReferralDetails = () => {
         : "This referral is still awaiting qualification, so the bonus has not been issued yet. It will only be credited once the referral qualifies.",
     },
   } as const;
-  const note = rewardNote[bonus.status];
+  const note = rewardNote[referral.bonusStatus];
 
   return (
     <div className="space-y-4">
@@ -93,12 +110,11 @@ export const ReferralDetails = () => {
             align="right"
             className="-my-3"
             items={[
-              { label: "Referral ID", value: referral.id },
-              { label: "Referral Code", value: referral.code },
-              { label: "Referral Date", value: formatDateOnly(referral.createdAt) },
+              { label: "Referral Code", value: referral.code ?? "—" },
+              { label: "Referral Date", value: when(referral.createdAt) },
               { label: "Referral Status", value: referralStatusStyles[referral.status].label },
-              { label: "Qualification Date", value: referral.qualifiedAt ? formatDate(referral.qualifiedAt) : "—" },
-              { label: "Qualification Requirement", value: triggerLabels[referralBonus.trigger] },
+              { label: "Qualification Date", value: when(referral.qualifiedAt) },
+              { label: "Qualification Requirement", value: referralBonus ? triggerLabel(referralBonus.trigger) : "—" },
             ]}
           />
           <WebAppNote icon={<Info />} className="mt-6">
@@ -113,8 +129,11 @@ export const ReferralDetails = () => {
           <WebAppDetailList
             align="right"
             items={[
-              { label: "Name", value: referral.referrerName },
-              { label: "User ID", value: <ArrowLink to={`/users/${referral.referrerId}`}>{referral.referrerId}</ArrowLink> },
+              { label: "Name", value: referral.referrerName ?? "—" },
+              {
+                label: "User",
+                value: referral.referrerId ? <ArrowLink to={`/users/${referral.referrerId}`}>View user</ArrowLink> : "—",
+              },
             ]}
           />
           <div className="mt-4">
@@ -122,25 +141,30 @@ export const ReferralDetails = () => {
             <WebAppDetailList
               align="right"
               items={[
-                { label: "Name", value: referral.referredUserName },
+                { label: "Name", value: referral.referredUserName ?? "Not signed up yet" },
+                { label: "Invited Contact", value: referral.inviteeContact ?? "—" },
                 {
-                  label: "User ID",
-                  value: <ArrowLink to={`/users/${referral.referredUserId}`}>{referral.referredUserId}</ArrowLink>,
+                  label: "User",
+                  value: referral.referredUserId ? (
+                    <ArrowLink to={`/users/${referral.referredUserId}`}>View user</ArrowLink>
+                  ) : (
+                    "—"
+                  ),
                 },
-                { label: "Registration Date", value: formatDateOnly(registeredAt) },
+                { label: "Registration Date", value: when(referral.joinedAt) },
               ]}
             />
           </div>
         </WebAppCard>
       </div>
 
-      <WebAppCard title="Reward Information" action={<BonusStatusBadge status={bonus.status} />}>
+      <WebAppCard title="Reward Information" action={<BonusStatusBadge status={referral.bonusStatus} />}>
         <div className="-my-3 grid gap-x-8 md:grid-cols-2">
           <WebAppDetailList
             align="right"
             items={[
-              { label: "Eligible Bonus Amount", value: formatNaira(bonus.amount) },
-              { label: "Bonus Status", value: bonusStatusStyles[bonus.status].label },
+              { label: "Eligible Bonus Amount", value: bonusAmount === null ? "—" : formatNaira(bonusAmount) },
+              { label: "Bonus Status", value: bonusStatusStyles[referral.bonusStatus].label },
             ]}
           />
           <WebAppDetailList
@@ -148,12 +172,14 @@ export const ReferralDetails = () => {
             items={[
               {
                 label: "Bonus Credit Date",
-                value: bonus.status === "paid" && bonus.transaction ? formatDate(bonus.transaction.createdAt) : "—",
+                value: referral.bonusStatus === "paid" ? when(referral.bonusCreditedAt) : "—",
               },
               {
                 label: "Wallet Transaction",
-                value: bonus.transaction ? (
-                  <ArrowLink to={`/wallets/transactions/${bonus.transaction.id}`}>{bonus.transaction.id}</ArrowLink>
+                value: referral.bonusTransactionId ? (
+                  <ArrowLink to={`/wallets/transactions/${encodeURIComponent(referral.bonusTransactionId)}`}>
+                    {referral.bonusTransactionId}
+                  </ArrowLink>
                 ) : (
                   "—"
                 ),
@@ -168,7 +194,7 @@ export const ReferralDetails = () => {
 
         <p className="mt-4 text-xs text-gray-500">
           Bonus amounts and qualification rules come from the referral configuration (current configured bonus:{" "}
-          {formatNaira(referralBonus.amount)}).{" "}
+          {configuredBonus === null ? "—" : formatNaira(configuredBonus)}).{" "}
           <ArrowLink to="/pricing">Pricing Management</ArrowLink>
         </p>
       </WebAppCard>

@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { yupResolver } from "@hookform/resolvers/yup";
 import { useLocation } from "react-router-dom";
 import { Pencil, ShieldCheck } from "lucide-react";
 
+import { authService } from "@/api/services/auth";
+import { handleApiError } from "@/api/utils";
 import { WebAppAvatar } from "@/components/Avatar";
 import { WebAppBadge } from "@/components/Badge";
 import { WebAppButton } from "@/components/Button";
@@ -11,14 +13,20 @@ import { WebAppCard } from "@/components/Card";
 import { WebAppDetailList } from "@/components/DetailList";
 import { WebAppInput } from "@/components/Input";
 import { WebAppPageHeader } from "@/components/PageHeader";
-import { mockAdmin } from "@/data/mock";
+import { useCurrentAdmin } from "@/hooks/useAuth";
 import { profileSchema, type ProfileValues } from "@/schemas/account";
+import { appToast } from "@/utils/appToast";
+import { formatLongDateTime, parseApiDate } from "@/utils/format";
 
 export const Profile = () => {
   const location = useLocation();
   // Account Settings links here with `{ edit: true }` to open the form directly.
   const [editing, setEditing] = useState(Boolean(location.state?.edit));
-  const [profile, setProfile] = useState(mockAdmin);
+  // The signed-in admin from `useAuth`, refreshed from GET /identity/me on open.
+  const profile = useCurrentAdmin();
+  useEffect(() => {
+    authService.me().catch(() => undefined);
+  }, []);
   const {
     register,
     handleSubmit,
@@ -34,10 +42,14 @@ export const Profile = () => {
     setEditing(true);
   };
 
-  // TODO: send to the API once the profile endpoint is available.
-  const onSubmit = async (values: ProfileValues) => {
-    setProfile({ ...profile, ...values });
-    setEditing(false);
+  const onSubmit = async ({ name, email }: ProfileValues) => {
+    try {
+      const { message } = await authService.updateProfile({ fullName: name, email });
+      appToast.show("Profile updated", message && message !== "Request successful" ? message : "Your profile was saved.", "success");
+      setEditing(false);
+    } catch (error) {
+      handleApiError(error, { fallbackMessage: "We couldn't update your profile." });
+    }
   };
 
   return (
@@ -97,7 +109,7 @@ export const Profile = () => {
               <WebAppButton variant="outline" onClick={() => setEditing(false)}>
                 Cancel
               </WebAppButton>
-              <WebAppButton type="submit" disabled={isSubmitting}>
+              <WebAppButton type="submit" loading={isSubmitting}>
                 Save Changes
               </WebAppButton>
             </div>
@@ -110,6 +122,11 @@ export const Profile = () => {
                 { label: "Full Name", value: profile.name },
                 { label: "Email", value: profile.email },
                 { label: "Role", value: profile.role },
+                { label: "Phone", value: profile.phone ?? "—" },
+                {
+                  label: "Last Sign-in",
+                  value: profile.lastLoginAt ? formatLongDateTime(parseApiDate(profile.lastLoginAt)) : "—",
+                },
               ]}
             />
             <WebAppButton

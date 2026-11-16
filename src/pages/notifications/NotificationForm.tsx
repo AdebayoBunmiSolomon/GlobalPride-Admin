@@ -10,8 +10,13 @@ import { WebAppEmptyState } from "@/components/EmptyState";
 import { WebAppInput } from "@/components/Input";
 import { WebAppPageHeader } from "@/components/PageHeader";
 import { WebAppTextarea } from "@/components/Textarea";
-import { useNotifications } from "@/hooks/useNotifications";
+import type { AdminAnnouncement } from "@/api/types/response";
+import { handleApiError } from "@/api/utils";
 import { useSettings } from "@/hooks/useSettings";
+import { ItemLoadState } from "@/pages/support/SupportParts";
+import { createAnnouncement, updateAnnouncement, useAnnouncement } from "@/store/announcementsStore";
+import { appToast } from "@/utils/appToast";
+import { parseApiDate } from "@/utils/format";
 import { fieldError } from "@/pages/pricing/fieldError";
 import {
   announcementSchema,
@@ -20,7 +25,6 @@ import {
   type AnnouncementValues,
   type DeliveryMode,
 } from "@/schemas/notification";
-import type { PlatformNotification } from "@/types/notification";
 import { cn } from "@/utils/cn";
 import { NotificationCard } from "./NotificationParts";
 import { backToNotifications } from "./notificationOptions";
@@ -85,11 +89,23 @@ const Section = ({ title, description, children }: { title: string; description?
   </WebAppCard>
 );
 
+const pad = (value: number) => String(value).padStart(2, "0");
+
+/** An API date-time as the local "YYYY-MM-DD" and "HH:mm" the date / time inputs use. */
+const toLocalParts = (value: string | null) => {
+  if (!value) return { date: "", time: "" };
+  const date = parseApiDate(value);
+  return {
+    date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    time: `${pad(date.getHours())}:${pad(date.getMinutes())}`,
+  };
+};
+
 /** Create / edit an admin announcement. Omit `notification` to create a new one. */
-const NotificationForm = ({ notification }: { notification?: PlatformNotification }) => {
+const NotificationForm = ({ notification }: { notification?: AdminAnnouncement }) => {
   const navigate = useNavigate();
-  const { createAnnouncement, updateAnnouncement } = useNotifications();
   const isEdit = Boolean(notification);
+  const scheduled = toLocalParts(notification?.scheduledAt ?? null);
 
   const {
     register,
@@ -102,9 +118,9 @@ const NotificationForm = ({ notification }: { notification?: PlatformNotificatio
       ? {
           title: notification.title,
           message: notification.message,
-          delivery: notification.scheduledFor ? "later" : "now",
-          scheduleDate: notification.scheduledFor?.slice(0, 10) ?? "",
-          scheduleTime: notification.scheduledFor?.slice(11, 16) ?? "",
+          delivery: notification.scheduledAt ? "later" : "now",
+          scheduleDate: scheduled.date,
+          scheduleTime: scheduled.time,
         }
       : { title: "", message: "", delivery: "now", scheduleDate: "", scheduleTime: "09:00" },
   });
@@ -112,14 +128,27 @@ const NotificationForm = ({ notification }: { notification?: PlatformNotificatio
   const [title, message, delivery] = useWatch({ control, name: ["title", "message", "delivery"] });
   const isLater = delivery === "later";
 
-  // TODO: send to the API once the notifications endpoint is available.
-  const onSubmit = ({ title, message, delivery, scheduleDate, scheduleTime }: AnnouncementValues) => {
-    const input = { title, message, scheduledFor: delivery === "later" ? `${scheduleDate}T${scheduleTime}` : undefined };
-    if (notification) {
-      updateAnnouncement(notification.id, input);
-      navigate(`/notifications/${notification.id}`);
-    } else {
-      navigate(`/notifications/${createAnnouncement(input)}`);
+  const onSubmit = async ({ title, message, delivery, scheduleDate, scheduleTime }: AnnouncementValues) => {
+    const payload = {
+      title,
+      message,
+      delivery,
+      // The inputs are local time; the API takes an ISO date-time (UTC).
+      scheduledAt: delivery === "later" ? new Date(`${scheduleDate}T${scheduleTime}`).toISOString() : null,
+    };
+    try {
+      const result = notification
+        ? await updateAnnouncement(notification, payload)
+        : await createAnnouncement(payload);
+      appToast.show(
+        delivery === "later" ? "Announcement scheduled" : "Announcement sent",
+        result.message || (delivery === "later" ? "It will go out to all users at the scheduled time." : "It's on its way to all users."),
+        "success",
+      );
+      const code = result.announcement?.code ?? notification?.code;
+      navigate(code ? `/notifications/${encodeURIComponent(code)}` : "/notifications");
+    } catch (error) {
+      handleApiError(error, { fallbackMessage: "We couldn't save this announcement." });
     }
   };
 
@@ -227,7 +256,9 @@ const NotificationForm = ({ notification }: { notification?: PlatformNotificatio
         <div className="flex justify-end gap-3">
           <WebAppButton
             variant="outline"
-            onClick={() => navigate(notification ? `/notifications/${notification.id}` : "/notifications")}
+            onClick={() =>
+              navigate(notification ? `/notifications/${encodeURIComponent(notification.code)}` : "/notifications")
+            }
           >
             Cancel
           </WebAppButton>
@@ -282,29 +313,38 @@ const editBreadcrumbs = [
 ];
 
 export const EditNotification = () => {
-  const { notificationId } = useParams();
+  const { notificationId = "" } = useParams();
   const navigate = useNavigate();
-  const notification = useNotifications((state) => state.notifications.find((item) => item.id === notificationId));
+  const { data: notification, error, loading, refresh } = useAnnouncement(notificationId);
 
-  // Only scheduled admin announcements can be edited.
-  if (!notification || notification.status !== "scheduled") {
+  if (!notification) {
+    return (
+      <ItemLoadState
+        breadcrumbs={editBreadcrumbs}
+        backLink={backToNotifications}
+        icon={<Bell className="h-6 w-6" />}
+        noun="Notification"
+        error={error}
+        loading={loading}
+        onRetry={refresh}
+      />
+    );
+  }
+
+  // Only scheduled announcements can be edited.
+  if (notification.status !== "scheduled") {
     return (
       <div>
         <WebAppPageHeader breadcrumbs={editBreadcrumbs} backLink={backToNotifications} />
         <WebAppCard>
           <WebAppEmptyState
             icon={<Bell className="h-6 w-6" />}
-            title={notification ? "This notification can't be edited" : "Notification not found"}
-            description={
-              notification
-                ? "Only scheduled announcements can be edited. Sent and cancelled notifications are kept for history."
-                : "This notification doesn't exist, or the link is incorrect."
-            }
-            primaryAction={
-              notification
-                ? { label: "View Notification", onClick: () => navigate(`/notifications/${notification.id}`) }
-                : { label: "Back to Notifications", onClick: () => navigate("/notifications") }
-            }
+            title="This notification can't be edited"
+            description="Only scheduled announcements can be edited. Sent and cancelled ones are kept for history."
+            primaryAction={{
+              label: "View Notification",
+              onClick: () => navigate(`/notifications/${encodeURIComponent(notification.code)}`),
+            }}
           />
         </WebAppCard>
       </div>

@@ -8,7 +8,10 @@ import { WebAppCard } from "@/components/Card";
 import { WebAppInput } from "@/components/Input";
 import { WebAppSelectInput } from "@/components/Select";
 import { WebAppTextarea } from "@/components/Textarea";
-import { useSettings } from "@/hooks/useSettings";
+import { handleApiError } from "@/api/utils";
+import { saveGeneralSettings, useAdminSettings } from "@/store/settingsStore";
+import type { GeneralSettings as GeneralSettingsData } from "@/types/settings";
+import { appToast } from "@/utils/appToast";
 import { fieldError } from "@/pages/pricing/fieldError";
 import {
   generalSettingsSchema,
@@ -17,7 +20,7 @@ import {
   type GeneralSettingsValues,
 } from "@/schemas/settings";
 import { ACCEPTED_LOGO_TYPES, MAX_LOGO_BYTES, timeZoneOptions } from "./settingsOptions";
-import { SettingsFooter, SettingsLayout } from "./SettingsLayout";
+import { SettingsFooter, SettingsLayout, SettingsLoadState } from "./SettingsLayout";
 
 /** Field label with a "12/80" character count on the right. */
 const CountedLabel = ({ children, length, max }: { children: ReactNode; length: number; max: number }) => (
@@ -39,15 +42,15 @@ interface LogoPickerProps {
 const LogoPicker = ({ value, onChange, onInvalid, error }: LogoPickerProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // TODO: upload to the API and keep the returned URL instead of a data URL.
+  // The API stores the logo as a data: URI.
   const readFile = (file?: File) => {
     if (!file) return;
     if (!ACCEPTED_LOGO_TYPES.includes(file.type)) {
-      onInvalid("Please upload a PNG, JPG, WebP or SVG image.");
+      onInvalid("Please upload a PNG, JPG or WebP image.");
       return;
     }
     if (file.size > MAX_LOGO_BYTES) {
-      onInvalid("The logo must be 1 MB or smaller.");
+      onInvalid("The logo must be 290 KB or smaller.");
       return;
     }
     const reader = new FileReader();
@@ -101,15 +104,14 @@ const LogoPicker = ({ value, onChange, onInvalid, error }: LogoPickerProps) => {
       {error && <p className="mt-2 text-xs text-red-500">{error}</p>}
       <p className="mt-3 text-xs text-gray-500">
         {value
-          ? "This logo is shown in the Admin Console sidebar. PNG, JPG, WebP or SVG, up to 1 MB."
+          ? "This logo is shown in the Admin Console sidebar. PNG, JPG or WebP, up to 290 KB."
           : "The Global Pride visual identity is applied by default."}
       </p>
     </div>
   );
 };
 
-export const GeneralSettings = () => {
-  const { general, setGeneral } = useSettings();
+const GeneralSettingsForm = ({ general }: { general: GeneralSettingsData }) => {
   const [saved, setSaved] = useState(false);
   const {
     register,
@@ -125,15 +127,18 @@ export const GeneralSettings = () => {
 
   const [platformName, description] = useWatch({ control, name: ["platformName", "description"] });
 
-  // TODO: send to the settings API once it exists.
-  const onSubmit = (values: GeneralSettingsValues) => {
-    setGeneral(values);
-    reset(values);
-    setSaved(true);
+  const onSubmit = async (values: GeneralSettingsValues) => {
+    try {
+      const { settings, message } = await saveGeneralSettings(values);
+      reset(settings.general);
+      setSaved(true);
+      if (message) appToast.show("Settings saved", message, "success");
+    } catch (error) {
+      handleApiError(error, { fallbackMessage: "We couldn't save the general settings." });
+    }
   };
 
   return (
-    <SettingsLayout title="General Settings" description="Manage basic information and global platform preferences.">
       <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <WebAppCard divided title="Platform Information" description="Basic details about the Global Pride platform.">
           <div className="space-y-4">
@@ -214,8 +219,6 @@ export const GeneralSettings = () => {
                 onChange={field.onChange}
                 searchable
                 searchPlaceholder="Search time zones…"
-                // TODO: pass this zone to the date formatters in utils/format once dates come from the API (the
-                // mock date-times have no zone, so converting them now would shift them).
                 helperText="The platform's default time zone. Admin Console dates currently follow your device's time zone."
                 error={fieldError(errors.timeZone?.message)}
                 className="bg-stone-50"
@@ -234,6 +237,18 @@ export const GeneralSettings = () => {
           }}
         />
       </form>
+  );
+};
+
+export const GeneralSettings = () => {
+  const { data, error, refresh } = useAdminSettings();
+  return (
+    <SettingsLayout title="General Settings" description="Manage basic information and global platform preferences.">
+      {data ? (
+        <GeneralSettingsForm key={JSON.stringify(data.general)} general={data.general} />
+      ) : (
+        <SettingsLoadState error={error} onRetry={() => void refresh()} />
+      )}
     </SettingsLayout>
   );
 };

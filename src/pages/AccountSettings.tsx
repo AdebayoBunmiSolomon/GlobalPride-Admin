@@ -4,20 +4,24 @@ import { yupResolver } from "@hookform/resolvers/yup";
 import { useNavigate } from "react-router-dom";
 import { Info, Lock, Pencil } from "lucide-react";
 
+import { authService } from "@/api/services/auth";
+import { handleApiError } from "@/api/utils";
 import { WebAppButton } from "@/components/Button";
 import { WebAppCard } from "@/components/Card";
 import { WebAppDetailList } from "@/components/DetailList";
 import { WebAppInput } from "@/components/Input";
 import { WebAppModal } from "@/components/Modal";
 import { WebAppPageHeader } from "@/components/PageHeader";
-import { mockAdmin } from "@/data/mock";
+import { useCurrentAdmin } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings";
 import { changePasswordSchema, type ChangePasswordValues } from "@/schemas/account";
+import { appToast } from "@/utils/appToast";
 
 const emptyPasswords: ChangePasswordValues = { current: "", next: "", confirm: "" };
 
 export const AccountSettings = () => {
   const navigate = useNavigate();
+  const admin = useCurrentAdmin();
   const [modalOpen, setModalOpen] = useState(false);
   const requireStrongPasswords = useSettings((state) => state.security.requireStrongPasswords);
   const {
@@ -35,10 +39,22 @@ export const AccountSettings = () => {
     reset(emptyPasswords);
   };
 
-  // TODO: send to the API once the change-password endpoint is available.
-  const onSubmit = async (values: ChangePasswordValues) => {
-    void values;
-    closeModal();
+  const onSubmit = async ({ current, next, confirm }: ChangePasswordValues) => {
+    try {
+      const message = await authService.changePassword({
+        currentPassword: current,
+        newPassword: next,
+        confirmNewPassword: confirm,
+      });
+      appToast.show(
+        "Password changed",
+        message && message !== "Request successful" ? message : "Your other devices have been signed out.",
+        "success",
+      );
+      closeModal();
+    } catch (error) {
+      handleApiError(error, { fallbackMessage: "We couldn't change your password." });
+    }
   };
 
   return (
@@ -57,9 +73,9 @@ export const AccountSettings = () => {
         <WebAppDetailList
           className="-mt-2"
           items={[
-            { label: "Full Name", value: mockAdmin.name },
-            { label: "Email", value: mockAdmin.email },
-            { label: "Role", value: mockAdmin.role },
+            { label: "Full Name", value: admin.name },
+            { label: "Email", value: admin.email },
+            { label: "Role", value: admin.role },
           ]}
         />
         <WebAppButton
@@ -127,7 +143,7 @@ export const AccountSettings = () => {
             error={errors.confirm?.message}
             helperText={
               requireStrongPasswords
-                ? "Must be at least 8 characters and include uppercase, lowercase and a number."
+                ? "Must be at least 8 characters and include uppercase, lowercase, a number and a special character."
                 : "Must be at least 8 characters."
             }
             {...register("confirm")}
@@ -137,7 +153,7 @@ export const AccountSettings = () => {
             <WebAppButton variant="outline" onClick={closeModal}>
               Cancel
             </WebAppButton>
-            <WebAppButton type="submit" disabled={isSubmitting}>
+            <WebAppButton type="submit" loading={isSubmitting}>
               Change Password
             </WebAppButton>
           </div>

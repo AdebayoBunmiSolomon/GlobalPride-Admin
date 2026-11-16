@@ -1,15 +1,15 @@
-import { Cpu, Flag, Megaphone, UserCog, type LucideIcon } from "lucide-react";
+import { Cpu, Flag, Gift, Megaphone, UserCog, type LucideIcon } from "lucide-react";
 
-import type { BadgeStyle } from "@/pages/campaigns/statusStyles";
-import type { Campaign } from "@/types/campaign";
 import type {
-  ActivityLogSource,
+  CampaignComplianceStatus,
   ComplianceFlag,
+  FlagAction,
   FlagSeverity,
   FlagSource,
   FlagStatus,
   ReportReason,
-} from "@/types/compliance";
+} from "@/api/types/response";
+import type { BadgeStyle } from "@/pages/campaigns/statusStyles";
 
 export const backToCompliance = { label: "Back to Compliance", to: "/compliance" };
 
@@ -31,57 +31,65 @@ export const flagSources: Record<FlagSource, { label: string; icon: LucideIcon }
   system: { label: "System", icon: Cpu },
   campaign: { label: "Campaign", icon: Megaphone },
   content_report: { label: "Content Report", icon: Flag },
+  account: { label: "Account", icon: UserCog },
+  referral: { label: "Referral", icon: Gift },
+};
+
+/** Labels for enforcement actions, shared by the review UI and the outcome. */
+export const flagActionLabels: Record<FlagAction, string> = {
+  campaign_cancelled: "Campaign Cancelled",
+  user_suspended: "User Suspended",
+  user_restricted: "User Restricted",
+  no_further_action: "No Further Action",
 };
 
 export const reportReasonLabels: Record<ReportReason, string> = {
   harassment: "Harassment",
-  spam: "Spam/Abuse",
-  fraud: "Fraud/Deception",
-  privacy: "Privacy Concern",
-  prohibited: "Prohibited Content",
+  spam_abuse: "Spam/Abuse",
+  fraud_deception: "Fraud/Deception",
+  privacy_concern: "Privacy Concern",
+  prohibited_content: "Prohibited Content",
   other: "Other",
-};
-
-export const activitySources: Record<ActivityLogSource, { label: string; icon: LucideIcon }> = {
-  campaign: { label: "Campaign", icon: Megaphone },
-  content_report: { label: "Content Report", icon: Flag },
-  account: { label: "Account", icon: UserCog },
 };
 
 const toOptions = (entries: [string, { label: string } | string][]) =>
   entries.map(([value, entry]) => ({ value, label: typeof entry === "string" ? entry : entry.label }));
 
-export const flagStatusFilterOptions = [{ label: "All Statuses", value: "all" }, ...toOptions(Object.entries(flagStatusStyles))];
+export const flagStatusFilterOptions = [
+  { label: "All Statuses", value: "all" },
+  { label: "Open (pending + under review)", value: "open" },
+  ...toOptions(Object.entries(flagStatusStyles)),
+];
 export const flagSeverityFilterOptions = [
   { label: "All Severities", value: "all" },
   ...toOptions(Object.entries(flagSeverityStyles)),
 ];
 export const flagSourceFilterOptions = [{ label: "All Sources", value: "all" }, ...toOptions(Object.entries(flagSources))];
+export const reportStatusFilterOptions = [{ label: "All Statuses", value: "all" }, ...toOptions(Object.entries(flagStatusStyles))];
 export const reportReasonFilterOptions = [
   { label: "All Reasons", value: "all" },
   ...toOptions(Object.entries(reportReasonLabels)),
 ];
-export const activitySourceFilterOptions = [
-  { label: "All Sources", value: "all" },
-  ...toOptions(Object.entries(activitySources)),
-];
 
 /** A flag that still needs a decision. */
-export const isOpenFlag = (flag: ComplianceFlag) => flag.status === "pending_review" || flag.status === "under_review";
+export const isOpenFlag = (flag: Pick<ComplianceFlag, "status">) =>
+  flag.status === "pending_review" || flag.status === "under_review";
+
+/** Matches the `?status=` filter, where "open" means pending or under review. */
+export const matchesFlagStatus = (flag: Pick<ComplianceFlag, "status">, status: string) =>
+  status === "all" || (status === "open" ? isOpenFlag(flag) : flag.status === status);
 
 // ---- Campaign compliance ----
-
-export type CampaignComplianceStatus = "flagged" | "under_review" | "resolved" | "clear";
 
 export const campaignComplianceStyles: Record<CampaignComplianceStatus, BadgeStyle> = {
   flagged: { label: "Flagged", variant: "warning", className: "text-amber-700" },
   under_review: { label: "Under Review", variant: "info", className: "text-blue-700" },
   resolved: { label: "Resolved", variant: "primary" },
-  clear: { label: "Clear", variant: "success", className: "text-green-700" },
 };
 
 export const campaignComplianceFilterOptions = [
   { label: "All Statuses", value: "all" },
+  { label: "Open (unresolved flag)", value: "open" },
   ...toOptions(Object.entries(campaignComplianceStyles)),
 ];
 
@@ -90,23 +98,17 @@ export const campaignComplianceRank: Record<CampaignComplianceStatus, number> = 
   flagged: 0,
   under_review: 1,
   resolved: 2,
-  clear: 3,
 };
 
-/**
- * A campaign's compliance status from its flags: Flagged while any flag is
- * waiting for review, Under Review while one is being reviewed, Resolved once
- * every flag is closed, Clear when it was never flagged.
- */
-export const getCampaignCompliance = (campaign: Campaign, flags: ComplianceFlag[]) => {
-  const campaignFlags = flags.filter((flag) => flag.campaignId === campaign.id);
-  const status: CampaignComplianceStatus = campaignFlags.some((flag) => flag.status === "pending_review")
-    ? "flagged"
-    : campaignFlags.some((flag) => flag.status === "under_review")
-      ? "under_review"
-      : campaignFlags.length > 0
-        ? "resolved"
-        : "clear";
-  const lastReviewed = campaignFlags.map((flag) => flag.updatedAt).sort().at(-1);
-  return { status, flagCount: campaignFlags.length, lastReviewed };
+/** Link for an audit log record: flags, campaigns, announcements, ads and tickets have pages. */
+export const recordLink = (record: string | null) => {
+  if (!record) return null;
+  const encoded = encodeURIComponent(record);
+  if (/^FLG-/i.test(record)) return `/compliance/flags/${encoded}`;
+  if (/^GP-\d/i.test(record)) return `/campaigns/${encoded}`;
+  if (/^NOT-/i.test(record)) return `/notifications/${encoded}`;
+  if (/^AD-/i.test(record)) return `/advertisements/${encoded}`;
+  if (/^TKT-/i.test(record)) return `/support/tickets/${encoded}`;
+  if (/^GP-TRX-/i.test(record)) return `/wallets/transactions/${encoded}`;
+  return null;
 };

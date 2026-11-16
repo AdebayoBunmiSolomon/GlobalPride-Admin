@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 
-import { useAuth } from "@/hooks/useAuth";
+import { authService } from "@/api/services/auth";
 import { useIdleTimeout } from "@/hooks/useIdleTimeout";
 import { useSettings } from "@/hooks/useSettings";
+import { useAdminSettings } from "@/store/settingsStore";
 
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
@@ -12,12 +13,13 @@ import { Topbar } from "./Topbar";
 const AdminLayout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
-  const logout = useAuth((state) => state.logout);
+  // Loads the platform settings once signed in; they also refresh the persisted `useSettings` cache.
+  useAdminSettings();
   const sessionTimeout = useSettings((state) => state.security.sessionTimeout);
 
   // Settings → Security → Admin Session Timeout.
   useIdleTimeout(sessionTimeout * 60_000, () => {
-    logout();
+    authService.signOut();
     navigate("/", { replace: true });
   });
 

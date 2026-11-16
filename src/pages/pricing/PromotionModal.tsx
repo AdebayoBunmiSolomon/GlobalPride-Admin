@@ -4,12 +4,14 @@ import { yupResolver } from "@hookform/resolvers/yup";
 import { WebAppInput } from "@/components/Input";
 import { WebAppModal } from "@/components/Modal";
 import { WebAppSelectInput } from "@/components/Select";
-import { usePricing } from "@/hooks/usePricing";
+import { handleApiError } from "@/api/utils";
+import { createPromotion, updatePromotion } from "@/store/promotionsStore";
+import { appToast } from "@/utils/appToast";
 import { promotionSchema, type PromotionValues } from "@/schemas/pricing";
 import type { Promotion } from "@/types/pricing";
 import { fieldError } from "./fieldError";
 import { ModalActions } from "./PricingModals";
-import { discountTypeOptions, promotionStatusOptions, promotionTargetOptions } from "./pricingOptions";
+import { discountTypeOptions, promotionTargetOptions } from "./pricingOptions";
 
 interface PromotionModalProps {
   /** Omit to create a new promotion. */
@@ -23,12 +25,10 @@ const newPromotion: Partial<PromotionValues> = {
   appliesTo: "sms",
   startDate: "",
   endDate: "",
-  status: "active",
 };
 
 /** Create / edit promotion form. Mount only while open so the form starts fresh. */
 export const PromotionModal = ({ promotion, onClose }: PromotionModalProps) => {
-  const { createPromotion, updatePromotion } = usePricing();
   const isEdit = Boolean(promotion);
   const {
     register,
@@ -37,16 +37,32 @@ export const PromotionModal = ({ promotion, onClose }: PromotionModalProps) => {
     formState: { errors, isSubmitting },
   } = useForm<PromotionValues>({
     resolver: yupResolver(promotionSchema),
-    defaultValues: promotion ?? newPromotion,
+    defaultValues: promotion
+      ? {
+          name: promotion.name,
+          discountType: promotion.discountType,
+          discountValue: promotion.discountValue,
+          appliesTo: promotion.appliesTo,
+          startDate: promotion.startDate,
+          endDate: promotion.endDate,
+        }
+      : newPromotion,
   });
 
   const isPercentage = useWatch({ control, name: "discountType" }) === "percentage";
 
-  // TODO: send to the API once the promotions endpoint is available.
-  const onSubmit = (values: PromotionValues) => {
-    if (promotion) updatePromotion(promotion.id, values);
-    else createPromotion(values);
-    onClose();
+  const onSubmit = async (values: PromotionValues) => {
+    try {
+      const { message } = promotion ? await updatePromotion(promotion, values) : await createPromotion(values);
+      appToast.show(
+        promotion ? "Promotion updated" : "Promotion created",
+        message || `${values.name} was saved. Its status follows the start and end dates.`,
+        "success",
+      );
+      onClose();
+    } catch (error) {
+      handleApiError(error, { fallbackMessage: "We couldn't save this promotion." });
+    }
   };
 
   const unit = <span className="text-sm text-gray-500">{isPercentage ? "%" : "₦"}</span>;
@@ -125,20 +141,9 @@ export const PromotionModal = ({ promotion, onClose }: PromotionModalProps) => {
           />
         </div>
 
-        <Controller
-          control={control}
-          name="status"
-          render={({ field }) => (
-            <WebAppSelectInput
-              id="promotionStatus"
-              label="Status"
-              options={promotionStatusOptions}
-              value={field.value}
-              onChange={field.onChange}
-              className="bg-stone-50"
-            />
-          )}
-        />
+        <p className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-gray-600">
+          The status is set from the dates: Scheduled before the start date, Active until the end date, then Expired.
+        </p>
 
         <ModalActions
           onCancel={onClose}

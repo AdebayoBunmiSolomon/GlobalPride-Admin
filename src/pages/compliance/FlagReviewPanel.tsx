@@ -7,11 +7,14 @@ import { WebAppCard } from "@/components/Card";
 import { WebAppDetailList } from "@/components/DetailList";
 import { WebAppModal } from "@/components/Modal";
 import { WebAppTextarea } from "@/components/Textarea";
-import { flagActionLabels, useCompliance } from "@/hooks/useCompliance";
-import { useUsers } from "@/hooks/useUsers";
-import type { ComplianceFlag, FlagAction } from "@/types/compliance";
+import type { ComplianceFlag, FlagAction } from "@/api/types/response";
+import { handleApiError } from "@/api/utils";
+import { useCurrentAdmin } from "@/hooks/useAuth";
+import { confirmFlagViolation, dismissFlag, startFlagReview } from "@/store/complianceStore";
+import { appToast } from "@/utils/appToast";
 import { cn } from "@/utils/cn";
-import { formatDateTimeShort } from "@/utils/format";
+import { formatDateTimeShort, parseApiDate } from "@/utils/format";
+import { flagActionLabels } from "./complianceOptions";
 
 type Decision = "violation" | "no_violation";
 
@@ -94,13 +97,28 @@ const SectionLabel = ({ children }: { children: string }) => (
 
 /** The "Compliance Review" card: start a review, record a decision, or show the outcome. */
 export const FlagReviewPanel = ({ flag }: { flag: ComplianceFlag }) => {
-  const { startReview, resolveFlag, dismissFlag } = useCompliance();
-  const setUserStatus = useUsers((state) => state.setStatus);
+  const { name: adminName } = useCurrentAdmin();
+  const [busy, setBusy] = useState(false);
   const [decision, setDecision] = useState<Decision>();
   const [action, setAction] = useState<FlagAction>();
   const [dismissReason, setDismissReason] = useState("");
   const [dismissError, setDismissError] = useState("");
   const [confirming, setConfirming] = useState(false);
+
+  /** Runs a review action with a spinner and toasts; resolves to whether it succeeded. */
+  const run = async (action: () => Promise<{ message: string | null }>, done: string, fallbackMessage: string) => {
+    setBusy(true);
+    try {
+      const { message } = await action();
+      appToast.show("Saved", message || done, "success");
+      return true;
+    } catch (caught) {
+      handleApiError(caught, { fallbackMessage });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
 
   if (flag.status === "pending_review") {
     return (
@@ -108,8 +126,14 @@ export const FlagReviewPanel = ({ flag }: { flag: ComplianceFlag }) => {
         <p className="text-sm text-gray-600">
           This flag is pending review. Open the review to investigate the flagged activity and record a decision.
         </p>
-        {/* TODO: call the compliance API once the review endpoints exist. */}
-        <WebAppButton className="mt-4" leftIcon={<Eye className="h-4 w-4" />} onClick={() => startReview(flag.id)}>
+        <WebAppButton
+          className="mt-4"
+          loading={busy}
+          leftIcon={<Eye className="h-4 w-4" />}
+          onClick={() =>
+            void run(() => startFlagReview(flag), "The flag is now under review.", "We couldn't start the review.")
+          }
+        >
           Start Review
         </WebAppButton>
       </WebAppCard>
@@ -117,7 +141,7 @@ export const FlagReviewPanel = ({ flag }: { flag: ComplianceFlag }) => {
   }
 
   if (flag.status === "resolved" || flag.status === "dismissed") {
-    const closedAt = flag.closedAt ? formatDateTimeShort(flag.closedAt) : "—";
+    const closedAt = flag.closedAt ? formatDateTimeShort(parseApiDate(flag.closedAt)) : "—";
     const closedBy = flag.closedBy ?? "—";
     return (
       <WebAppCard title="Compliance Review">
@@ -153,12 +177,14 @@ export const FlagReviewPanel = ({ flag }: { flag: ComplianceFlag }) => {
     (option) => option !== "campaign_cancelled" || Boolean(flag.campaignId),
   );
 
-  // TODO: call the compliance API once the review endpoints exist.
-  const confirmViolation = () => {
+  const confirmViolation = async () => {
     if (!action) return;
-    resolveFlag(flag.id, action);
-    if (action === "user_suspended") setUserStatus(flag.userId, "suspended");
-    setConfirming(false);
+    const done = await run(
+      () => confirmFlagViolation(flag, action, adminName),
+      `Violation confirmed. ${flagActionLabels[action]} applied.`,
+      "We couldn't record this decision.",
+    );
+    if (done) setConfirming(false);
   };
 
   const dismiss = () => {
@@ -167,7 +193,7 @@ export const FlagReviewPanel = ({ flag }: { flag: ComplianceFlag }) => {
       setDismissError("Please explain why no violation was found.");
       return;
     }
-    dismissFlag(flag.id, reason);
+    void run(() => dismissFlag(flag, reason, adminName), "The flag was dismissed: no violation.", "We couldn't dismiss this flag.");
   };
 
   return (
@@ -206,8 +232,8 @@ export const FlagReviewPanel = ({ flag }: { flag: ComplianceFlag }) => {
         <div className="mt-5 border-t border-gray-100 pt-4">
           <SectionLabel>Take Action</SectionLabel>
           <p className="-mt-1 mb-3 text-xs text-gray-600">
-            Select the action to apply. The action is recorded in the audit log, and the underlying account or campaign
-            state is managed in its own module.
+            Select the action to apply. The platform applies it straight away (suspending or restricting the account,
+            or cancelling the campaign) and records it in the audit log.
           </p>
           <div role="radiogroup" aria-label="Action" className="space-y-2">
             {actions.map((option) => (
@@ -248,7 +274,7 @@ export const FlagReviewPanel = ({ flag }: { flag: ComplianceFlag }) => {
             error={dismissError || undefined}
             className="bg-stone-50"
           />
-          <WebAppButton variant="outline" leftIcon={<ShieldCheck className="h-4 w-4" />} onClick={dismiss}>
+          <WebAppButton variant="outline" loading={busy} leftIcon={<ShieldCheck className="h-4 w-4" />} onClick={dismiss}>
             Dismiss Flag
           </WebAppButton>
         </div>
@@ -258,10 +284,10 @@ export const FlagReviewPanel = ({ flag }: { flag: ComplianceFlag }) => {
         <WebAppModal open={confirming} onClose={() => setConfirming(false)} title={confirmCopy[action].title}>
           <p className="text-sm text-gray-600">{confirmCopy[action].text}</p>
           <div className="mt-5 flex justify-end gap-3">
-            <WebAppButton variant="outline" onClick={() => setConfirming(false)}>
+            <WebAppButton variant="outline" onClick={() => setConfirming(false)} disabled={busy}>
               Cancel
             </WebAppButton>
-            <WebAppButton variant="danger" onClick={confirmViolation}>
+            <WebAppButton variant="danger" loading={busy} onClick={() => void confirmViolation()}>
               Confirm Action
             </WebAppButton>
           </div>

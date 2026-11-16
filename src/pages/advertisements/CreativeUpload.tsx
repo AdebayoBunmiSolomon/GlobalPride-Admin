@@ -9,24 +9,24 @@ interface CreativeUploadProps {
   id: string;
   /** Image URL / data URL of the current creative, or empty. */
   value?: string;
-  onChange: (value: string) => void;
+  /** A data URL for preview plus the chosen file, or "" when removed. */
+  onChange: (value: string, file?: File) => void;
   /** Called with a message when the chosen file is rejected. */
   onInvalid: (message: string) => void;
   error?: ReactNode;
 }
 
-const hint = "JPG, PNG or WebP · up to 5 MB";
+const hint = "JPG, PNG, GIF or WebP · up to 5 MB";
 
 /** Creative image picker: a drop zone when empty, otherwise a thumbnail with Replace / Remove. */
 export const CreativeUpload = ({ id, value, onChange, onInvalid, error }: CreativeUploadProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
-  // TODO: upload to the API and keep the returned URL instead of a data URL.
   const readFile = (file?: File) => {
     if (!file) return;
     if (!ACCEPTED_CREATIVE_TYPES.includes(file.type)) {
-      onInvalid("Please upload a JPG, PNG or WebP image.");
+      onInvalid("Please upload a JPG, PNG, GIF or WebP image.");
       return;
     }
     if (file.size > MAX_CREATIVE_BYTES) {
@@ -34,7 +34,7 @@ export const CreativeUpload = ({ id, value, onChange, onInvalid, error }: Creati
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => onChange(String(reader.result));
+    reader.onload = () => onChange(String(reader.result), file);
     reader.onerror = () => onInvalid("We couldn't read that file. Please try another image.");
     reader.readAsDataURL(file);
   };

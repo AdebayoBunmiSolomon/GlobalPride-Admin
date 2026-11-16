@@ -10,11 +10,15 @@ import {
   YAxis,
 } from "recharts";
 
+import type { DashboardSummary } from "@/api/types/response";
+import { formatPrice, formatShortDay } from "@/utils/format";
+
 const axisTick = { fontSize: 11, fill: "#6b7280" };
-const toThousands = (value: number) => (value === 0 ? "0k" : `${value / 1000}k`);
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+const formatCompact = (value: number) => compact.format(value);
 
 interface CampaignPerformanceChartProps {
-  data: { day: string; campaigns: number; messages: number }[];
+  data: DashboardSummary["campaignPerformance"];
 }
 
 export const CampaignPerformanceChart = ({ data }: CampaignPerformanceChartProps) => (
@@ -22,27 +26,35 @@ export const CampaignPerformanceChart = ({ data }: CampaignPerformanceChartProps
     <div className="h-64">
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 8, right: 0, left: -24, bottom: 0 }}>
-          <XAxis dataKey="day" tick={axisTick} tickLine={false} axisLine={{ stroke: "#e5e7eb" }} />
-          <YAxis yAxisId="campaigns" tick={axisTick} tickLine={false} axisLine={false} />
+          <XAxis
+            dataKey="date"
+            tick={axisTick}
+            tickLine={false}
+            axisLine={{ stroke: "#e5e7eb" }}
+            tickFormatter={formatShortDay}
+            minTickGap={16}
+          />
+          <YAxis yAxisId="campaigns" tick={axisTick} tickLine={false} axisLine={false} allowDecimals={false} />
           <YAxis
             yAxisId="messages"
             orientation="right"
             tick={axisTick}
             tickLine={false}
             axisLine={false}
-            tickFormatter={toThousands}
+            allowDecimals={false}
+            tickFormatter={formatCompact}
           />
-          <Tooltip />
+          <Tooltip labelFormatter={(label) => formatShortDay(String(label))} />
           <Bar
             yAxisId="campaigns"
-            dataKey="campaigns"
+            dataKey="campaignsCreated"
             name="Campaigns Created"
             fill="var(--color-primary)"
-            barSize={12}
+            maxBarSize={12}
           />
           <Line
             yAxisId="messages"
-            dataKey="messages"
+            dataKey="messagesSent"
             name="Messages Sent"
             type="monotone"
             stroke="#111827"
@@ -65,11 +77,14 @@ export const CampaignPerformanceChart = ({ data }: CampaignPerformanceChartProps
 );
 
 interface RevenueChartProps {
-  data: { day: string; revenue: number }[];
+  /** Per-day totals, e.g. the dashboard's `revenueOverview` or the finance summary's series. */
+  data: { date: string; total: number }[];
+  /** Height, e.g. "h-56". */
+  className?: string;
 }
 
-export const RevenueChart = ({ data }: RevenueChartProps) => (
-  <div className="h-36">
+export const RevenueChart = ({ data, className = "h-36" }: RevenueChartProps) => (
+  <div className={className}>
     <ResponsiveContainer width="100%" height="100%">
       <AreaChart data={data} margin={{ top: 8, right: 4, left: -12, bottom: 0 }}>
         <defs>
@@ -78,16 +93,19 @@ export const RevenueChart = ({ data }: RevenueChartProps) => (
             <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0} />
           </linearGradient>
         </defs>
-        <XAxis dataKey="day" hide />
+        <XAxis dataKey="date" hide />
         <YAxis
           tick={axisTick}
           tickLine={false}
           axisLine={false}
-          tickFormatter={(value: number) => `₦${toThousands(value)}`}
+          tickFormatter={(value: number) => `₦${formatCompact(value)}`}
         />
-        <Tooltip />
+        <Tooltip
+          labelFormatter={(label) => formatShortDay(String(label))}
+          formatter={(value) => formatPrice(Number(value), { fixed: true })}
+        />
         <Area
-          dataKey="revenue"
+          dataKey="total"
           name="Revenue"
           type="monotone"
           stroke="var(--color-primary)"

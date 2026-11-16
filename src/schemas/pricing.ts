@@ -1,13 +1,6 @@
 import * as yup from "yup";
 
-import type {
-  DiscountType,
-  PromotionStatus,
-  PromotionTarget,
-  ReferralBonusStatus,
-  ReferralRewardType,
-  ReferralTrigger,
-} from "@/types/pricing";
+import type { DiscountType, PromotionTarget } from "@/types/pricing";
 
 // Empty number inputs come through as "" → treat them as missing, not NaN.
 const number = (message: string) =>
@@ -33,12 +26,6 @@ export type VatRateValues = yup.InferType<typeof vatRateSchema>;
 
 export const referralBonusSchema = yup.object({
   amount: number("Please enter a valid bonus amount.").moreThan(0, "Bonus amount must be greater than ₦0."),
-  rewardType: yup.mixed<ReferralRewardType>().oneOf(["wallet_credit", "campaign_credit"]).required(),
-  trigger: yup
-    .mixed<ReferralTrigger>()
-    .oneOf(["successful_referral", "first_campaign", "first_wallet_funding"])
-    .required(),
-  status: yup.mixed<ReferralBonusStatus>().oneOf(["active", "inactive"]).required(),
 });
 
 export type ReferralBonusValues = yup.InferType<typeof referralBonusSchema>;
@@ -61,7 +48,6 @@ export const promotionSchema = yup.object({
       const { startDate } = this.parent as { startDate?: string };
       return !value || !startDate || value >= startDate;
     }),
-  status: yup.mixed<PromotionStatus>().oneOf(["active", "scheduled", "expired"]).required(),
 });
 
 export type PromotionValues = yup.InferType<typeof promotionSchema>;

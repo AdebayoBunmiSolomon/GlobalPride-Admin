@@ -1,5 +1,5 @@
 import { WebAppBadge } from "@/components/Badge";
-import type { ReferralBonusStatus, ReferralStatus } from "@/types/referral";
+import type { ReferralBonusStatus, ReferralStatus } from "@/api/types/response";
 import { bonusStatusStyles, referralStatusStyles } from "./referralOptions";
 
 export const ReferralStatusBadge = ({ status }: { status: ReferralStatus }) => {

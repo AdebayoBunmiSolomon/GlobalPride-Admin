@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Navigate, useLocation, useNavigate, type Location } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { yupResolver } from "@hookform/resolvers/yup";
-import { CircleAlert, Eye, EyeOff, Info, Lock, LogIn, Mail, Megaphone, ShieldCheck, Wallet } from "lucide-react";
+import { CircleAlert, Eye, EyeOff, Lock, LogIn, Mail, Megaphone, ShieldCheck, Wallet } from "lucide-react";
 
 import { authService } from "@/api/services/auth";
 import { WebAppButton } from "@/components/Button";
@@ -12,11 +12,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings";
 import { fieldError } from "@/pages/pricing/fieldError";
 import { loginSchema, type LoginValues } from "@/schemas/account";
-import type { ApiError } from "@/types/api-response";
-
-// TODO: set to false once the auth API is available.
-/** While true, any valid email and password signs in with a placeholder token (no API call). */
-const MOCK_AUTH = true;
+import type { ApiError } from "@/api/types/response";
 
 const highlights = [
   { icon: Megaphone, title: "Campaigns & audiences", text: "Monitor delivery, pricing and the audience marketplace." },
@@ -109,7 +105,7 @@ export const Login = () => {
   const onSubmit = async (values: LoginValues) => {
     clearErrors("root");
     try {
-      const result = MOCK_AUTH ? { token: "mock-token" } : await authService.login(values);
+      const result = await authService.login(values);
       login(result);
       navigate(from, { replace: true });
     } catch (error) {
@@ -202,13 +198,6 @@ export const Login = () => {
               Sign In
             </WebAppButton>
           </form>
-
-          {MOCK_AUTH && (
-            <p className="mt-4 flex items-start gap-2 rounded-lg bg-stone-50 px-3 py-2 text-xs text-gray-600">
-              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" />
-              Demo mode: any valid email and password signs you in until the auth API is connected.
-            </p>
-          )}
 
           <p className="mt-8 flex items-center gap-2 text-xs text-gray-500">
             <ShieldCheck className="h-4 w-4 shrink-0 text-gray-400" />
